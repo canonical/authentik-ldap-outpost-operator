@@ -1,4 +1,4 @@
-# Copyright 2026 nikos.sklikas@canonical.com
+# Copyright 2026 Ubuntu
 # See LICENSE file for licensing details.
 #
 # The integration tests use the Jubilant library. See https://documentation.ubuntu.com/jubilant/
