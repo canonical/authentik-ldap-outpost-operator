@@ -1,82 +1,116 @@
 #!/usr/bin/env python3
-# Copyright 2026 nikos.sklikas@canonical.com
+# Copyright 2026 Canonical Ltd.
 # See LICENSE file for licensing details.
 
-"""Charm the application."""
+"""Charm the Authentik LDAP outpost application."""
 
 import logging
-import time
 
 import ops
-
-# A standalone module for workload-specific logic (no charming concerns):
-import authentik_ldap_outpost
+from constants import (
+    LDAP_RELATION,
+    LDAPS_PORT,
+    PEER_RELATION,
+    SERVER_INFO_RELATION,
+    WORKLOAD_CONTAINER,
+)
+from integrations import Integrations
+from services import PebbleService
 
 logger = logging.getLogger(__name__)
 
-SERVICE_NAME = "some-service"  # Name of Pebble service that runs in the workload container.
 
-
-class AuthentikLdapOutpostK8SOperatorCharm(ops.CharmBase):
-    """Charm the application."""
+class AuthentikLdapCharm(ops.CharmBase):
+    """Authentik LDAP Outpost Operator."""
 
     def __init__(self, framework: ops.Framework):
         super().__init__(framework)
-        framework.observe(self.on["some_container"].pebble_ready, self._on_pebble_ready)
-        self.container = self.unit.get_container("some-container")
 
-    def _on_pebble_ready(self, event: ops.PebbleReadyEvent):
-        """Handle pebble-ready event."""
-        self.unit.status = ops.MaintenanceStatus("starting workload")
-        # To start the workload, we'll add a Pebble layer to the workload container.
-        # The layer specifies which service to run.
-        layer: ops.pebble.LayerDict = {
-            "services": {
-                SERVICE_NAME: {
-                    "override": "replace",
-                    "summary": "A service that runs in the workload container",
-                    "command": "/bin/foo",  # Change this!
-                    "startup": "enabled",
-                }
-            }
-        }
-        self.container.add_layer("base", layer, combine=True)
-        # If the container image is a rock, the container already has a Pebble layer.
-        # In this case, you could remove 'add_layer' or use 'add_layer' to extend the rock's layer.
-        # To learn about rocks, see https://documentation.ubuntu.com/rockcraft/en/stable/
-        self.container.replan()  # Starts the service (because 'startup' is enabled in the layer).
-        self.wait_for_ready()
-        version = authentik_ldap_outpost.get_version()
-        if version is not None:
-            self.unit.set_workload_version(version)
-        self.unit.status = ops.ActiveStatus()
+        self._container = self.unit.get_container(WORKLOAD_CONTAINER)
+        self._pebble_service = PebbleService(self._container)
+        self._config = None
+        self.integrations = Integrations(self)
 
-    def is_ready(self) -> bool:
-        """Check whether the workload is ready to use."""
-        # We'll first check whether all Pebble services are running.
-        for name, service_info in self.container.get_services().items():
-            if not service_info.is_running():
-                logger.info("the workload is not ready (service '%s' is not running)", name)
-                return False
-        # The Pebble services are running, but the workload might not be ready to use.
-        # So we'll check whether all Pebble 'ready' checks are passing.
-        checks = self.container.get_checks(level=ops.pebble.CheckLevel.READY)
-        for check_info in checks.values():
-            if check_info.status != ops.pebble.CheckStatus.UP:
-                return False
-        return True
+        for event in [
+            self.on.install,
+            self.on.config_changed,
+            self.on.authentik_ldap_pebble_ready,
+            self.on[PEER_RELATION].relation_joined,
+        ]:
+            self.framework.observe(event, self._on_event)
 
-    def wait_for_ready(self) -> None:
-        """Wait for the workload to be ready to use."""
-        for _ in range(3):
-            if self.is_ready():
-                return
-            time.sleep(1)
-        logger.error("the workload was not ready within the expected time")
-        raise RuntimeError("workload is not ready")
-        # The runtime error is for you (the charm author) to see, not for the user of the charm.
-        # Make sure that this function waits long enough for the workload to be ready.
+        if self.integrations.server_info.events:
+            self.framework.observe(
+                self.integrations.server_info.events.info_changed,
+                self._on_event,
+            )
+            self.framework.observe(
+                self.integrations.server_info.events.info_removed,
+                self._on_event,
+            )
+        else:
+            self.framework.observe(
+                self.on[SERVER_INFO_RELATION].relation_changed,
+                self._on_event,
+            )
+            self.framework.observe(
+                self.on[SERVER_INFO_RELATION].relation_broken,
+                self._on_event,
+            )
+
+        if self.integrations.ingress.ldap_events:
+            self.framework.observe(
+                self.integrations.ingress.ldap_events.ready,
+                self._on_event,
+            )
+        if self.integrations.ingress.ldaps_events:
+            self.framework.observe(
+                self.integrations.ingress.ldaps_events.ready,
+                self._on_event,
+            )
+
+        self.framework.observe(self.on.collect_unit_status, self._on_collect_status)
+
+    def _on_event(self, event: ops.EventBase) -> None:
+        self._reconcile()
+
+    def _reconcile(self) -> None:
+        if not self._container.can_connect():
+            return
+        self._ensure_pebble_layer()
+        self._ensure_ldap_provider()
+
+    def _on_collect_status(self, event: ops.CollectStatusEvent) -> None:
+        if not self._container.can_connect():
+            event.add_status(ops.WaitingStatus("waiting for pebble"))
+            return
+        if not self.integrations.server_info.is_ready():
+            event.add_status(ops.BlockedStatus("missing authentik-server-info relation"))
+            return
+        event.add_status(ops.ActiveStatus())
+
+    def _ensure_pebble_layer(self) -> None:
+        env = self.integrations.server_info.build_env()
+        if not env:
+            return
+        from services import AuthentikLdapWorkload
+
+        layer = AuthentikLdapWorkload.build_layer(env)
+        self._pebble_service.plan(layer)
+        self._container.open_port("tcp", 3389)
+        self._container.open_port("tcp", LDAPS_PORT)
+
+    def _ensure_ldap_provider(self) -> None:
+        if not self.integrations.server_info.is_ready():
+            return
+        if not self.model.get_relation(LDAP_RELATION):
+            return
+        password = self.integrations.server_info.get_bootstrap_password()
+        if not password:
+            return
+        unit_address = Integrations.get_unit_address(self.model, LDAP_RELATION)
+        self.integrations.ldap_provider.update_data(unit_address, password)
 
 
-if __name__ == "__main__":  # pragma: nocover
-    ops.main(AuthentikLdapOutpostK8SOperatorCharm)
+if __name__ == "__main__":
+    ops.main(AuthentikLdapCharm)
