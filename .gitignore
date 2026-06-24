@@ -36,3 +36,5 @@ htmlcov/
 # AI Agent runtimes
 .agent/
 .opencode/
+.agents/skills
+
