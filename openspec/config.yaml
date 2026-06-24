@@ -1,0 +1,46 @@
+schema: spec-driven
+
+context: |
+  Juju Kubernetes charm for the Authentik LDAP outpost (goauthentik.io), part of the Canonical Identity Platform.
+  The LDAP outpost acts as an LDAP server backed by Authentik, allowing LDAP-capable services to authenticate
+  against Authentik without direct database access.
+
+  Tech stack: Python ops framework, Pebble workload management, connects to Authentik server via
+  authentik-server-info relation.
+
+  Source modules (src/):
+  - charm.py: orchestrator, events → _reconcile() holistic handler
+  - services.py: AuthentikLdapWorkload (build + apply Pebble layer)
+  - integrations.py: relation wrappers — ServerInfoIntegration, LdapProviderIntegration, IngressIntegration,
+    Integrations orchestrator; classes implement EnvVarConvertible (to_env_vars())
+  - configs.py: CharmConfig (charm config → env vars)
+  - constants.py: ports (LDAP :3389, LDAPS :6636), relation names, workload constants
+  - env_vars.py: EnvVarConvertible protocol, DEFAULT_CONTAINER_ENV
+  - exceptions.py: custom exception hierarchy
+  - secret.py: Juju secrets management helper
+  - authentik_ldap_outpost.py: workload interaction functions (version probe, etc.)
+  - cli.py: CLI helpers
+  - utils.py: utility helpers
+
+  Workload: `/ldap` binary on LDAP :3389 / LDAPS :6636.
+  Credentials (host, token, bootstrap_password) come from the authentik-server-info relation.
+  Provides LDAP service to consumers via the ldap relation (glauth interface).
+  Traefik IngressPerUnit provides external LDAP and LDAPS endpoints via separate ingress relations.
+
+  Charm libraries in lib/charms/ are read-only (managed by charmcraft).
+  Coding conventions and testing patterns are in AGENTS.md.
+
+rules:
+  spec:
+    - Every spec must include a ## Purpose section before ## Requirements
+    - The ## Purpose section is the single source of truth for design rationale (ADR-style); capture intent, goals, non-goals, and key decisions (with brief alternatives) so no separate ADR or design file is needed
+    - Keep the ## Purpose human-readable: prose and decisions, not machine-generated task lists or file-path dumps
+    - Requirements stay behaviour-driven (SHALL/MUST + #### Scenario blocks); the "why" lives in ## Purpose, the "what" in ## Requirements
+  proposal:
+    - Keep proposals concise (under 400 words)
+    - Always include a Non-goals section
+    - Reference affected src/ modules by filename
+  tasks:
+    - Break tasks into single-module units of work (one src/ file per task where possible)
+    - Each task must reference the file(s) it touches
+    - Always include a task for adding or updating unit tests
