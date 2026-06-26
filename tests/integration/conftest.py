@@ -13,6 +13,8 @@ import time
 import jubilant
 import pytest
 
+from tests.integration.constants import APP_NAME, DB_APP, SERVER_APP, WORKER_APP
+
 logger = logging.getLogger(__name__)
 
 
@@ -45,3 +47,11 @@ def charm():
         path_list = ", ".join(str(path) for path in charm_paths)
         raise ValueError(f"More than one .charm file in current directory: {path_list}")
     return charm_paths[0]
+
+
+def integrate_dependencies(juju: jubilant.Juju) -> None:
+    """Integrate the charm with all required dependencies."""
+    juju.integrate(DB_APP, SERVER_APP)
+    juju.integrate(DB_APP, WORKER_APP)
+    juju.integrate(f"{SERVER_APP}:authentik-cluster", WORKER_APP)
+    juju.integrate(f"{SERVER_APP}:authentik-server-info", APP_NAME)
