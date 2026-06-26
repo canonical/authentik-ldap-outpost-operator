@@ -1,15 +1,5 @@
-# conftest Specification
+## ADDED Requirements
 
-## Purpose
-
-This specification outlines the shared unit testing configuration and fixtures established in `tests/unit/conftest.py`. It modernizes the test framework to align with the platform's standard `ops.testing` (Scenario-based) paradigms.
-
-### Design Decisions
-- **Standardized `create_state` Factory**: Replaces ad-hoc `testing.Harness` scaffolding with a unified, parameterizable `create_state()` factory. This provides standard, sensible defaults (e.g. leadership state, active container connectivity, default mock structures) to streamline unit test setups.
-- **Mocking External APIs**: Includes an autouse fixture `mocked_k8s_resource_patch` to prevent real Kubernetes API requests during unit testing, avoiding fragile tests and network failures.
-- **Shared Test State**: Provides reusable, pre-fabricated mock instances (such as database credentials, server integrations, container structures) to minimize boilerplate across the entire test suite.
-
-## Requirements
 ### Requirement: create_state factory
 `tests/unit/conftest.py` SHALL export a module-level function `create_state()` that returns a complete `ops.testing.State` with sensible defaults. It MUST accept the keyword arguments: `leader` (bool, default `True`), `secrets` (list, default `[]`), `relations` (list, default `[]`), `containers` (list, default container with `can_connect=True`), `config` (dict, default `{}`), `can_connect` (bool, default `True`). When `containers` is not provided the default container MUST be `testing.Container("authentik-ldap", can_connect=can_connect)`.
 
@@ -56,4 +46,3 @@ This specification outlines the shared unit testing configuration and fixtures e
 - **THEN** `remote_app_data["authentik_host"]` equals `"http://authentik:9000"`
 - **THEN** `remote_app_data["bootstrap_token_secret_id"]` equals `"secret:xyz"`
 - **THEN** `remote_app_data["bootstrap_password_secret_id"]` equals `"secret:abc"`
-

@@ -1,17 +1,15 @@
-# utils-and-services Specification
-
 ## Purpose
 
-This specification defines the shared helper modules, environment configurations, and service interaction abstractions (`src/utils.py`, `src/services.py`, `src/env_vars.py`, and `src/configs.py`). It aligns these files with platform-wide conventions used across `authentik-server` and `tenant-service` to maximize copy-paste reuse and eliminate legacy scaffold code.
+The current `utils.py` contains scaffold leftovers that are not relevant to the LDAP outpost: `condition_factory`, `database_integration_exists`, a broken `container_connectivity` that reads a non-existent `_workload_container` attribute, and a `leader_unit` decorator. These are replaced with the canonical pattern used in authentik-server and tenant-service.
 
-### Design Decisions
-- **Legacy Scaffold Cleanup (`src/utils.py`)**: Removes unreferenced boilerplate helpers (e.g. `condition_factory`, `database_integration_exists`, `leader_unit`) to expose only the critical reconciliation check utilities: `container_connectivity()`, `server_info_integration_exists()`, and the aggregated guard list `NOOP_CONDITIONS`.
-- **Workload Management Alignment (`src/services.py`)**:
-  - Enforces that the underlying container service starts as `"disabled"` in the Pebble layer to prevent race conditions before configuration is fully rendered and planned.
-  - Standardizes service plan application, choosing `start()` or `replan()` appropriately depending on the workload's active execution state.
-- **Type-Safe Environment & Configuration Mapping**: Defines a canonical `EnvVars` type-alias inside `src/env_vars.py` and implements `to_env_vars()` inside `src/configs.py` to support safe, declarative configuration mapping via the `EnvVarConvertible` protocol.
+The current `services.py` has no `WorkloadService` class — it only has `AuthentikLdapWorkload` (static layer builder) and `PebbleService`. Two bugs exist: (1) `startup: "enabled"` should be `"disabled"` (the service should only start when the charm explicitly calls `plan()`), and (2) `PebbleService.plan()` calls `replan()` unconditionally — it should call `start()` if the service is not running, `replan()` otherwise.
 
-## Requirements
+The `env_vars.py` has an `EnvVarMerger` class and a `dict[str, str]` return type annotation that diverges from the canonical `EnvVars` TypeAlias used across the platform. The `configs.py` does not implement `to_env_vars()` at all.
+
+**Alignment goal**: after this change, `utils.py`, `services.py`, `env_vars.py`, and `configs.py` are direct siblings of the equivalents in authentik-server, maximising copy-paste reuse.
+
+## ADDED Requirements
+
 ### Requirement: `utils.py` contains only `container_connectivity`, `server_info_integration_exists`, and `NOOP_CONDITIONS`
 `src/utils.py` SHALL define:
 - `container_connectivity(charm: AuthentikLdapCharm) -> bool` — returns `charm.unit.get_container(WORKLOAD_CONTAINER).can_connect()`
@@ -75,4 +73,3 @@ The existing `log_level` property and `is_valid()` method SHALL be removed (supe
 #### Scenario: to_env_vars returns log level env var
 - **WHEN** `CharmConfig({"log_level": "debug"}).to_env_vars()` is called
 - **THEN** `AUTHENTIK_LOG_LEVEL` equals `"debug"`
-

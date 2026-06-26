@@ -1,20 +1,19 @@
-# charmcraft-config Specification
-
 ## Purpose
 
-This specification defines the declarative Juju charm configuration (`charmcraft.yaml`) required to package, build, deploy, and integrate the Authentik LDAP Outpost Charm.
+The `charmcraft.yaml` was scaffolded but never updated to reflect the real workload. Three problems prevent the charm from deploying:
 
-### Design Decisions
-- **Non-Root Container Policy**: Standardizes container deployment to run securely as non-root under the Juju `charm-user`, explicitly removing hardcoded container-level `uid` and `gid` configurations.
-- **Container Realignment**: Standardizes the workload container name as `authentik-ldap` (realigned from the legacy scaffold `authentik-ldap-outpost`) to synchronize the declarative package configuration with internal Python constants.
-- **Upstream Outpost Sync**: Pin the OCI image's upstream source to a verified, stable release of the `goauthentik/ldap` binary (`2026.2.2`).
-- **Clean Interface & Relation Declarations**: Removes irrelevant database relations (like PostgreSQL `pg-database` inherited from template boilerplate) and explicitly defines required and optional charm interfaces:
-  - `authentik-server-info` (receive Authentik host & token info)
-  - `ldap` (provide LDAP connections to consuming apps)
-  - `ingress` & `ldaps-ingress` (expose LDAP/S outside the K8s cluster)
-  - `authentik-ldap-peers` (replicate outpost unit states)
+1. **Wrong container name**: `authentik-ldap-outpost` instead of `authentik-ldap`. The Pebble layer in `services.py` already targets `WORKLOAD_CONTAINER = "authentik-ldap"` from `constants.py`. A mismatch means the layer is applied to a container that doesn't exist.
+2. **Wrong OCI image**: `ghcr.io/canonical/authentik-ldap-outpost:v0.2.0` is a non-existent image. The correct upstream image is `ghcr.io/goauthentik/ldap:2026.2.2`.
+3. **Missing relations**: All custom relations (`authentik-server-info`, `ldap`, `ingress`, `ldaps-ingress`, `authentik-ldap-peers`) are absent from the YAML, so `juju integrate` fails for all of them.
 
-## Requirements
+Additional cleanup:
+- `gid`/`uid` on the container are wrong — this charm uses `charm-user: non-root` in `charmcraft.yaml` for non-root execution; container-level uid/gid override is not needed and conflicts with the non-root convention.
+- `pg-database` relation is bogus — the LDAP outpost does not use PostgreSQL; it connects to Authentik via HTTP API over `authentik-server-info`.
+
+**Non-goals**: No code changes beyond `charmcraft.yaml` and `constants.py` constant verification.
+
+## ADDED Requirements
+
 ### Requirement: Container name matches constant
 `charmcraft.yaml` SHALL declare a container named `authentik-ldap` matching `WORKLOAD_CONTAINER` in `src/constants.py`. The container SHALL NOT set `gid` or `uid` fields.
 
@@ -65,4 +64,3 @@ The `pg-database` relation SHALL be removed.
 #### Scenario: No undefined constant references
 - **WHEN** `src/charm.py` and `src/integrations.py` import from `constants`
 - **THEN** all imported names resolve without `ImportError`
-

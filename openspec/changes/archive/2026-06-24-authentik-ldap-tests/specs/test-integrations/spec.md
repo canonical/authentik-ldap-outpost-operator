@@ -1,15 +1,5 @@
-# test-integrations Specification
+## ADDED Requirements
 
-## Purpose
-
-This specification defines the unit tests written for integration classes and relation wrappers in `tests/unit/test_integrations.py`.
-
-### Design Decisions
-- **Isolated Unit Testing (Mocking over Harness)**: Eschews active Juju event harness setups for integration components, opting instead to unit-test wrappers (`ServerInfoIntegration`, `TracingData`) in absolute isolation.
-- **Strict Stubbing with `create_autospec`**: Uses `unittest.mock.create_autospec()` to mock underlying relation libraries (like `AuthentikServerInfoRequirer` and tracing endpoints). This ensures tests strictly conform to libraries' public Python signatures and fail immediately if underlying library APIs drift.
-- **Contract Verification**: Exhaustively verifies that wrapper data transformations (`to_env_vars()` and `load()`) output standard structure shapes for both populated relation databags and empty fallback scenarios.
-
-## Requirements
 ### Requirement: TestServerInfoIntegration — to_env_vars returns env when ready
 `test_integrations.py` SHALL contain a class `TestServerInfoIntegration`. It MUST include a test `test_to_env_vars_returns_env_when_ready` that constructs `ServerInfoIntegration` with a `create_autospec()`-mocked requirer whose `is_ready()` returns `True` and whose data yields `authentik_host` and a resolved bootstrap token. The test MUST assert that `to_env_vars()` returns a dict containing keys `AUTHENTIK_HOST` and `AUTHENTIK_TOKEN`.
 
@@ -63,4 +53,3 @@ This specification defines the unit tests written for integration classes and re
 #### Scenario: TracingData without endpoint produces empty env vars
 - **WHEN** `TracingData.to_env_vars()` is called on an instance with no endpoint
 - **THEN** the result is an empty dict `{}`
-

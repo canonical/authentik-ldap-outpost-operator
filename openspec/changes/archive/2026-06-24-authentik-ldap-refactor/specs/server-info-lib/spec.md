@@ -1,16 +1,18 @@
-# server-info-lib Specification
-
 ## Purpose
 
-This specification defines the contract of the shared Juju library `lib/charms/authentik_server/v0/authentik_server_info.py`. It corrects fundamental flaws in the event dispatch system and aligns the library interface across the Authentik server and outpost operators.
+The existing `lib/charms/authentik_server/v0/authentik_server_info.py` has a broken event system: `AuthentikServerInfoRequirerEvents` does not subclass `ObjectEvents` and instead hand-rolls an `on` attribute, which breaks the Juju framework's event dispatch machinery. Additionally, the secret IDs in the databag used non-standard field names (`authentik_token_secret_id` instead of `bootstrap_token_secret_id`), inconsistent with the provider spec.
 
-### Design Decisions
-- **Standard Juju Event Machinery Integration**: Corrects the custom, hand-rolled event dispatcher by making `AuthentikServerInfoRequirerEvents` properly subclass `ObjectEvents`, restoring compatibility with Juju's core lifecycle execution.
-- **Unified Event Pipeline**: Replaces complex, non-standard state change event pairs (`info_changed`/`info_removed`) with a single, reliable positive trigger: `on.ready`. Consumers observe a single event which fires only when a complete databag is established.
-- **Pydantic Validation**: Uses a Pydantic `BaseModel` (`ServerInfoData`) for rigid, runtime type validation of host and bootstrap secret metadata.
-- **Standard Secret Identifiers**: Standardizes app databag field names (`host`, `bootstrap_token_secret_id`, `bootstrap_password_secret_id`) to maintain cross-charm interoperability.
+The fixed lib aligns with the server charm's `authentik-server-libs` change. This spec defines the requirer-side contract the LDAP outpost charm consumes. The provider side lives in the server charm and is not modified here.
 
-## Requirements
+**Key decisions:**
+- `ObjectEvents` subclassing is mandatory for Juju event framework compatibility
+- The `on.ready` event replaces the non-standard `info_changed`/`info_removed` pair — consumers observe a single positive event (ready), not paired changed/removed events
+- `ServerInfoData` is a Pydantic `BaseModel` for type safety and validation
+- Databag field names: `host`, `bootstrap_token_secret_id`, `bootstrap_password_secret_id`
+- `LIBPATCH` is incremented; no `LIBAPI` bump (no breaking change from the LDAP charm's perspective since the lib was not functional)
+
+## ADDED Requirements
+
 ### Requirement: Requirer emits `on.ready` when all fields are present
 `AuthentikServerInfoRequirer` SHALL subclass `ops.Object` and declare `on = AuthentikServerInfoRequirerEvents()` where `AuthentikServerInfoRequirerEvents` subclasses `ObjectEvents`. It SHALL observe `charm.on[relation_name].relation_changed` and emit `on.ready` when `is_ready` is `True`.
 
@@ -53,4 +55,3 @@ The `LIBPATCH` constant in the library file SHALL be incremented by 1 from its c
 #### Scenario: Library version bump
 - **WHEN** the updated library file is committed
 - **THEN** `LIBPATCH` is greater than its previous value
-

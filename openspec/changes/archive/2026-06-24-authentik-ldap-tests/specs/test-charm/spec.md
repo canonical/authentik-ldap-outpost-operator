@@ -1,17 +1,5 @@
-# test-charm Specification
+## ADDED Requirements
 
-## Purpose
-
-This specification defines the unit tests written for the core charm orchestration module in `tests/unit/test_charm.py`. It establishes comprehensive, event-driven test coverage utilizing the `ops.testing` (Scenario) library.
-
-### Design Decisions
-- **Unified Scenario Framework**: Replaces the fragile, stateful `Harness` approach with `ops.testing.Scenario`, evaluating the charm's event handling via immutable inputs and output state transitions.
-- **Critical Flow Test Coverage**:
-  - **Reconciliation Guards**: Asserts that `_holistic_handler` properly returns early (NOOP) without attempting to render layers or write relation data when pre-requisites are unfulfilled.
-  - **Pebble Readiness Side Effects**: Asserts that workload container startup opens the required network ports, applies the configuration, and sets the active version.
-  - **centralized Status Verification**: Exhaustively tests status accumulation scenarios (`ActiveStatus`, `WaitingStatus`, and various custom `BlockedStatus` conditions) to prevent user-facing status regressions.
-
-## Requirements
 ### Requirement: TestHolisticHandler — NOOP guard skips planning when container not ready
 `test_charm.py` SHALL contain a class `TestHolisticHandler`. It MUST include a test `test_when_pebble_not_ready_skips_planning` that asserts the Pebble service plan is NOT updated when `can_connect=False`.
 
@@ -68,4 +56,3 @@ This specification defines the unit tests written for the core charm orchestrati
 - **WHEN** a `pebble_ready` event fires with `can_connect=True`
 - **THEN** `WorkloadService.set_version` is called exactly once
 - **THEN** `state_out.workload_version` reflects the version returned by `set_version`
-

@@ -36,6 +36,7 @@ rules:
     - The ## Purpose section is the single source of truth for design rationale (ADR-style); capture intent, goals, non-goals, and key decisions (with brief alternatives) so no separate ADR or design file is needed
     - Keep the ## Purpose human-readable: prose and decisions, not machine-generated task lists or file-path dumps
     - Requirements stay behaviour-driven (SHALL/MUST + #### Scenario blocks); the "why" lives in ## Purpose, the "what" in ## Requirements
+    - When archiving a change or initializing a specification, agents MUST write a complete, holistic ## Purpose section for the capability instead of leaving TBD placeholders.
   proposal:
     - Keep proposals concise (under 400 words)
     - Always include a Non-goals section

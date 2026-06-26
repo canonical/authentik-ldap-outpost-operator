@@ -1,16 +1,24 @@
-# charm-reconcile Specification
-
 ## Purpose
 
-This specification establishes the holistic reconciliation architecture of the Authentik LDAP Outpost Juju Charm. By aligning with the canonical patterns found across the platform (such as in `authentik-server` and `tenant-service`), it standardizes the event observation and orchestration model.
+`charm.py.__init__` currently checks `if self.integrations.server_info.events:` before observing events — a runtime workaround for the broken lib. With the fixed lib, `server_info.on.ready` always exists and events can be observed unconditionally, following the standard Juju ops pattern.
 
-### Design Decisions
-- **Unconditional Event Wiring**: Rather than checking for event existence dynamically (a runtime workaround for previous library constraints), `server_info.on.ready` and ingress events are observed unconditionally during charm initialization, guaranteeing predictable event-loop registration.
-- **Holistic Reconciliation Pattern**: Relies on a single, unified orchestration pathway (`_reconcile()`) instead of scattered event-specific handlers. Most incoming Juju events delegate to `_on_holistic_handler` which triggers the main `_reconcile()` loop.
-- **Status Accumulation Pattern**: Unit and application statuses are determined dynamically inside a centralized hook (`_on_collect_status`) rather than being modified continuously and haphazardly across different event handlers.
-- **EAFP & Guard Rails**: Employs an *Easier to Ask Forgiveness than Permission (EAFP)* coding paradigm. Pre-reconciliation checks (`NOOP_CONDITIONS`) safely return early if the container is not ready or required relations are absent, avoiding unhandled tracebacks or premature state manipulation.
+The charm currently uses `_on_event → _reconcile()`. This change aligns it with the canonical pattern used across authentik-server and tenant-service:
+- `_on_holistic_handler(event)` — sets `MaintenanceStatus("Configuring resources")`, calls `_holistic_handler(event)`
+- `_holistic_handler(event)` — runs `NOOP_CONDITIONS` guard first, then reconciles
+- `_on_pebble_ready(event)` — calls `open_port()`, `_on_holistic_handler()`, `set_version()`
+- `_on_pebble_check_failed/recovered` — logs health check transitions
 
-## Requirements
+`_ensure_pebble_layer()` now calls `PebbleService.render_pebble_layer(*env_var_sources)` — the `EnvVarConvertible` protocol — instead of calling `build_layer(build_env())` directly.
+
+`_ensure_ldap_provider()` uses `model.get_binding()` for address resolution with ingress fallback.
+
+**Key invariants:**
+- `_holistic_handler()` is the single reconciliation path — all events delegate to it via `_on_holistic_handler()`
+- Status is reported exclusively via `_on_collect_status`
+- No `event.defer()` calls
+
+## ADDED Requirements
+
 ### Requirement: Events observed unconditionally
 `AuthentikLdapCharm.__init__` SHALL observe `server_info.on.ready`, `ingress.ldap_requirer.on.ready`, and `ingress.ldaps_requirer.on.ready` without any `if hasattr` or `if .events` guards.
 
@@ -49,15 +57,15 @@ This specification establishes the holistic reconciliation architecture of the A
 - **WHEN** `server_info.is_ready()` is `False`
 - **THEN** `PebbleService.render_pebble_layer()` is NOT called
 
-### Requirement: `_ensure_ldap_provider()` provisions isolated Service Accounts and sets relation data
-`charm.py._ensure_ldap_provider()` SHALL use the ingress URL (from `IngressPerUnitRequirer`) if available, falling back to `model.get_binding(LDAP_RELATION).network.bind_address`. For each integrated `ldap` relation, the charm leader SHALL provision a unique Service Account on the Authentik server via the API client, set a strong random password, assign it to the directory search group, and populate the peer relation. The charm SHALL then call `ldap_provider.update_relation_data(relation_id, address, base_dn, bind_dn, password)` to populate the relation databag.
+### Requirement: `_ensure_ldap_provider()` resolves address with ingress fallback
+`charm.py._ensure_ldap_provider()` SHALL use the ingress URL (from `IngressPerUnitRequirer`) if available, falling back to `model.get_binding(LDAP_RELATION).network.bind_address`. It SHALL call `ldap_provider.update_data(address, bootstrap_password)` only when `server_info.is_ready()` is `True` and the `ldap` relation exists.
 
 #### Scenario: Address from ingress
-- **WHEN** `IngressIntegration.ldap_requirer` has a ready URL and a relation is updated
+- **WHEN** `IngressIntegration.ldap_requirer` has a ready URL
 - **THEN** the LDAP address is derived from the ingress URL
 
 #### Scenario: Address from pod IP
-- **WHEN** no ingress URL is available and a relation is updated
+- **WHEN** no ingress URL is available
 - **THEN** the LDAP address is derived from `model.get_binding(LDAP_RELATION).network.bind_address`
 
 ### Requirement: `_on_collect_status()` reports all relevant statuses
@@ -75,4 +83,3 @@ This specification establishes the holistic reconciliation architecture of the A
 #### Scenario: Blocked without server info
 - **WHEN** `server_info.is_ready()` is `False`
 - **THEN** `BlockedStatus` with message `"missing authentik-server-info relation"` is added
-

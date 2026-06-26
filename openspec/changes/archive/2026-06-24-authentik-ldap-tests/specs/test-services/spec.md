@@ -1,15 +1,5 @@
-# test-services Specification
+## ADDED Requirements
 
-## Purpose
-
-This specification defines the unit tests written for underlying workload service management and Pebble orchestration inside `tests/unit/test_services.py`.
-
-### Design Decisions
-- **Isolated Service Mocking**: Tests workload interaction logic (`PebbleService` and `WorkloadService`) in isolation. Uses `create_autospec()` to mock underlying container objects, preventing real execution or process interaction.
-- **Pebble Plan & Service State Validation**: Checks that the correct Pebble plan configuration is mapped (e.g., confirming the service is `"disabled"` by default on startup, and that service restarts call `replan` vs `start` appropriately depending on active runtime states).
-- **Workload Integration Verification**: Asserts that environment variables and service definitions are accurately merged when constructing the container Pebble layer configuration.
-
-## Requirements
 ### Requirement: TestPebbleService — render_pebble_layer merges sources
 `test_services.py` SHALL contain a class `TestPebbleService`. It MUST include a test `test_render_pebble_layer_merges_sources` asserting that `PebbleService.render_pebble_layer()` (or equivalent layer-building call) produces a `pebble.Layer` that contains the service definition from the workload and any environment variables sourced from the integration wrappers.
 
@@ -54,4 +44,3 @@ This specification defines the unit tests written for underlying workload servic
 #### Scenario: Service active but check failing reports is_failing
 - **WHEN** the service status is `pebble.ServiceStatus.ACTIVE` and the ready check is failing
 - **THEN** `WorkloadService.is_failing()` returns `True`
-
