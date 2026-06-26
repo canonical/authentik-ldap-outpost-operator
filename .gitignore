@@ -2,39 +2,42 @@
 __pycache__/
 *.py[cod]
 *$py.class
+*.so
+.Python
 *.egg-info/
-.eggs/
-dist/
-build/
-
-# Virtual environments
-venv/
 .venv/
+venv/
 ENV/
 env/
 
-# Testing & Coverage
+# Testing
 .tox/
-.cover/
 .coverage
+.cover/
 htmlcov/
 .pytest_cache/
 
-# IDEs
+# Build artifacts
+*.charm
+dist/
+build/
+
+# IDE
 .vscode/
 .idea/
 *.swp
 *.swo
 *~
 
-# Charmcraft
-*.charm
-/prime/
-/stage/
-/parts/
+# Headroom
+.headroom/
+
+# OpenSpec archive
+openspec/changes/archive/
 
 # AI Agent runtimes
 .agent/
 .opencode/
 .agents/skills
+
 
