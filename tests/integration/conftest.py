@@ -52,6 +52,5 @@ def charm():
 def integrate_dependencies(juju: jubilant.Juju) -> None:
     """Integrate the charm with all required dependencies."""
     juju.integrate(DB_APP, SERVER_APP)
-    juju.integrate(DB_APP, WORKER_APP)
     juju.integrate(f"{SERVER_APP}:authentik-cluster", WORKER_APP)
     juju.integrate(f"{SERVER_APP}:authentik-server-info", APP_NAME)

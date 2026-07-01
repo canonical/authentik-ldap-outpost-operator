@@ -186,4 +186,5 @@ def mocked_api_client(mocker: Any) -> Any:
     mock_instance.get_token_key.return_value = "mock-token-123"
     mock_instance.get_group_by_name.return_value = "group-uuid"
     mock_instance.create_service_account.return_value = (42, "ldap-client-relation-1")
+    mock_instance.check_outpost_exists.return_value = True
     return mock_class

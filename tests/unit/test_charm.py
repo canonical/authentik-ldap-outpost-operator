@@ -295,25 +295,33 @@ class TestResourcePatch:
         state_out = context.run(context.on.collect_unit_status(), state_in)
         assert state_out.unit_status == ops.BlockedStatus("resource patch failed")
 
-    def test_on_resource_patch_failed_reconciles(self, mocker: Any) -> None:
+    def test_on_resource_patch_failed_reconciles(
+        self, mocker: Any, context: testing.Context
+    ) -> None:
         """Test that _on_resource_patch_failed event handler triggers reconciliation."""
         from charms.observability_libs.v0.kubernetes_compute_resources_patch import (
-            K8sResourcePatchFailedEvent,
+            KubernetesComputeResourcesPatch,
         )
-        from ops.testing import Harness
 
-        from charm import AuthentikLdapCharm
+        mock_reconcile = mocker.MagicMock()
 
-        harness = Harness(AuthentikLdapCharm)
-        harness.begin()
-        charm = harness.charm
+        def mock_handler(self, event: Any) -> None:
+            mock_reconcile(event)
 
-        mock_reconcile = mocker.patch.object(charm, "_on_holistic_handler")
-        mock_event = mocker.MagicMock(spec=K8sResourcePatchFailedEvent)
-        mock_event.message = "k8s api error"
+        mocker.patch("charm.AuthentikLdapCharm._on_holistic_handler", mock_handler)
 
-        charm._on_resource_patch_failed(mock_event)
-        mock_reconcile.assert_called_once_with(mock_event)
+        state_in = create_state()
+        context.run(
+            context.on.custom(
+                KubernetesComputeResourcesPatch.on.patch_failed,
+                message="k8s api error",
+            ),
+            state_in,
+        )
+
+        mock_reconcile.assert_called_once()
+        called_event = mock_reconcile.call_args[0][0]
+        assert called_event.message == "k8s api error"
 
 
 class TestLdapRelation:
@@ -350,14 +358,16 @@ class TestLdapRelation:
 
         state_out = context.run(context.on.relation_joined(ldap_relation), state_in)
 
-        # Assert peer relation has saved the credentials
+        # Assert peer relation has saved the credentials in the merged JSON format
+        import json
+
         peer_rel = state_out.get_relation(state_out.get_relations("authentik-ldap-peers")[0].id)
-        assert peer_rel.local_app_data.get(f"client_{ldap_relation.id}_user_id") == "42"
-        assert (
-            peer_rel.local_app_data.get(f"client_{ldap_relation.id}_username")
-            == "ldap-client-relation-1"
-        )
-        assert f"client_{ldap_relation.id}_password" in peer_rel.local_app_data
+        client_data_str = peer_rel.local_app_data.get(f"client_{ldap_relation.id}")
+        assert client_data_str is not None
+        client_data = json.loads(client_data_str)
+        assert client_data.get("user_id") == "42"
+        assert client_data.get("username") == "ldap-client-relation-1"
+        assert "password" in client_data
 
         # Assert consumer relation gets the provisioned details
         consumer_rel = state_out.get_relation(ldap_relation.id)
@@ -413,3 +423,264 @@ class TestLdapRelation:
         assert f"client_{ldap_relation.id}_user_id" not in peer_rel_out.local_app_data
         assert f"client_{ldap_relation.id}_username" not in peer_rel_out.local_app_data
         assert f"client_{ldap_relation.id}_password" not in peer_rel_out.local_app_data
+
+
+class TestProvisionAuthentikResources:
+    """Tests for the Authentik resource provisioning and optimization."""
+
+    def test_first_run_provisions_resources(
+        self,
+        context: testing.Context,
+        server_info_relation: testing.Relation,
+    ) -> None:
+        """Test that resources are provisioned on the first run."""
+        secret_token = testing.Secret(
+            {"bootstrap-token": "token123"},
+            id="secret:xyz",
+        )
+        secret_password = testing.Secret(
+            {"bootstrap-password": "password123"},
+            id="secret:abc",
+        )
+        state_in = create_state(
+            can_connect=True,
+            relations=[server_info_relation],
+            secrets=[secret_token, secret_password],
+        )
+        state_out = context.run(context.on.config_changed(), state_in)
+
+        # Retrieve peer data
+        peer_rel = state_out.get_relation(state_out.get_relations("authentik-ldap-peers")[0].id)
+        assert peer_rel.local_app_data.get("provider_pk") == "1"
+        assert peer_rel.local_app_data.get("outpost_uuid") == "outpost-uuid"
+        assert peer_rel.local_app_data.get("outpost_token") == "mock-token-123"
+        assert peer_rel.local_app_data.get("last_base_dn") == "dc=ldap,dc=goauthentik,dc=io"
+
+    def test_second_run_skips_provisioning_if_config_unchanged(
+        self,
+        context: testing.Context,
+        server_info_relation: testing.Relation,
+        mocked_api_client: Any,
+    ) -> None:
+        """Test that provisioning is skipped on subsequent runs if config is unchanged."""
+        secret_token = testing.Secret(
+            {"bootstrap-token": "token123"},
+            id="secret:xyz",
+        )
+        secret_password = testing.Secret(
+            {"bootstrap-password": "password123"},
+            id="secret:abc",
+        )
+        peer_relation = testing.PeerRelation(
+            endpoint="authentik-ldap-peers",
+            interface="authentik_ldap_peers",
+            local_app_data={
+                "provider_pk": "1",
+                "outpost_uuid": "outpost-uuid",
+                "outpost_token": "mock-token-123",
+                "last_base_dn": "dc=ldap,dc=goauthentik,dc=io",
+                "last_search_mode": "direct",
+                "last_bind_mode": "direct",
+                "last_mfa_support": "False",
+            },
+        )
+        state_in = create_state(
+            can_connect=True,
+            relations=[server_info_relation, peer_relation],
+            secrets=[secret_token, secret_password],
+        )
+
+        mock_client = mocked_api_client.return_value
+        mock_client.check_outpost_exists.return_value = True
+
+        context.run(context.on.config_changed(), state_in)
+
+        # check_outpost_exists should have been called
+        mock_client.check_outpost_exists.assert_called_once_with("outpost-uuid")
+        # get_or_create_provider should NOT have been called
+        mock_client.get_or_create_provider.assert_not_called()
+
+    def test_reprovisions_if_config_changed(
+        self,
+        context: testing.Context,
+        server_info_relation: testing.Relation,
+        mocked_api_client: Any,
+    ) -> None:
+        """Test that provider configuration is updated directly if the configuration changes."""
+        secret_token = testing.Secret(
+            {"bootstrap-token": "token123"},
+            id="secret:xyz",
+        )
+        secret_password = testing.Secret(
+            {"bootstrap-password": "password123"},
+            id="secret:abc",
+        )
+        peer_relation = testing.PeerRelation(
+            endpoint="authentik-ldap-peers",
+            interface="authentik_ldap_peers",
+            local_app_data={
+                "provider_pk": "1",
+                "outpost_uuid": "outpost-uuid",
+                "outpost_token": "mock-token-123",
+                "last_base_dn": "dc=different,dc=dn",  # config changed
+                "last_search_mode": "direct",
+                "last_bind_mode": "direct",
+                "last_mfa_support": "False",
+            },
+        )
+        state_in = create_state(
+            can_connect=True,
+            relations=[server_info_relation, peer_relation],
+            secrets=[secret_token, secret_password],
+        )
+
+        mock_client = mocked_api_client.return_value
+        mock_client.check_outpost_exists.return_value = True
+
+        context.run(context.on.config_changed(), state_in)
+
+        # check_outpost_exists should have been called to verify the outpost still exists
+        mock_client.check_outpost_exists.assert_called_once_with("outpost-uuid")
+        # update_provider_config should be called to sync new config directly
+        mock_client.update_provider_config.assert_called_once_with(
+            provider_pk=1,
+            base_dn="dc=ldap,dc=goauthentik,dc=io",
+            search_mode="direct",
+            bind_mode="direct",
+            mfa_support=False,
+        )
+        # get_or_create_provider should NOT be called
+        mock_client.get_or_create_provider.assert_not_called()
+
+    def test_reprovisions_if_outpost_does_not_exist(
+        self,
+        context: testing.Context,
+        server_info_relation: testing.Relation,
+        mocked_api_client: Any,
+    ) -> None:
+        """Test that resources are re-provisioned if check_outpost_exists raises an error."""
+        secret_token = testing.Secret(
+            {"bootstrap-token": "token123"},
+            id="secret:xyz",
+        )
+        secret_password = testing.Secret(
+            {"bootstrap-password": "password123"},
+            id="secret:abc",
+        )
+        peer_relation = testing.PeerRelation(
+            endpoint="authentik-ldap-peers",
+            interface="authentik_ldap_peers",
+            local_app_data={
+                "provider_pk": "1",
+                "outpost_uuid": "outpost-uuid",
+                "outpost_token": "mock-token-123",
+                "last_base_dn": "dc=ldap,dc=goauthentik,dc=io",
+                "last_search_mode": "direct",
+                "last_bind_mode": "direct",
+                "last_mfa_support": "False",
+            },
+        )
+        state_in = create_state(
+            can_connect=True,
+            relations=[server_info_relation, peer_relation],
+            secrets=[secret_token, secret_password],
+        )
+
+        mock_client = mocked_api_client.return_value
+        mock_client.check_outpost_exists.side_effect = Exception("Not found")
+
+        context.run(context.on.config_changed(), state_in)
+
+        # check_outpost_exists should have been called
+        mock_client.check_outpost_exists.assert_called_once_with("outpost-uuid")
+        # get_or_create_provider should be called because outpost was not found
+        mock_client.get_or_create_provider.assert_called_once()
+
+    def test_leader_elected_cleans_up_orphaned_relations(
+        self,
+        context: testing.Context,
+        server_info_relation: testing.Relation,
+        mocked_api_client: Any,
+    ) -> None:
+        """Test that leader_elected cleans up orphaned relations in peer data."""
+        secret_token = testing.Secret(
+            {"bootstrap-token": "token123"},
+            id="secret:xyz",
+        )
+        secret_password = testing.Secret(
+            {"bootstrap-password": "password123"},
+            id="secret:abc",
+        )
+        peer_relation = testing.PeerRelation(
+            endpoint="authentik-ldap-peers",
+            interface="authentik_ldap_peers",
+            local_app_data={
+                "outpost_token": "mock-token-123",
+                "client_99_user_id": "42",
+                "client_99_username": "ldap-client-relation-99",
+                "client_99_password": "strongpassword",
+            },
+        )
+        # Note: relation ID 99 is tracked but does NOT exist in active relations list
+        state_in = create_state(
+            can_connect=True,
+            relations=[server_info_relation, peer_relation],
+            secrets=[secret_token, secret_password],
+        )
+
+        mock_client = mocked_api_client.return_value
+
+        state_out = context.run(context.on.leader_elected(), state_in)
+
+        # Assert deletion API call was made
+        mock_client.delete_user.assert_called_once_with(42)
+
+        # Assert peer relation keys are cleanly deleted
+        peer_rel_out = state_out.get_relation(peer_relation.id)
+        assert "client_99_user_id" not in peer_rel_out.local_app_data
+        assert "client_99_username" not in peer_rel_out.local_app_data
+        assert "client_99_password" not in peer_rel_out.local_app_data
+
+    def test_update_status_cleans_up_orphaned_relations(
+        self,
+        context: testing.Context,
+        server_info_relation: testing.Relation,
+        mocked_api_client: Any,
+    ) -> None:
+        """Test that update_status cleans up orphaned relations in peer data."""
+        secret_token = testing.Secret(
+            {"bootstrap-token": "token123"},
+            id="secret:xyz",
+        )
+        secret_password = testing.Secret(
+            {"bootstrap-password": "password123"},
+            id="secret:abc",
+        )
+        peer_relation = testing.PeerRelation(
+            endpoint="authentik-ldap-peers",
+            interface="authentik_ldap_peers",
+            local_app_data={
+                "outpost_token": "mock-token-123",
+                "client_99_user_id": "42",
+                "client_99_username": "ldap-client-relation-99",
+                "client_99_password": "strongpassword",
+            },
+        )
+        state_in = create_state(
+            can_connect=True,
+            relations=[server_info_relation, peer_relation],
+            secrets=[secret_token, secret_password],
+        )
+
+        mock_client = mocked_api_client.return_value
+
+        state_out = context.run(context.on.update_status(), state_in)
+
+        # Assert deletion API call was made
+        mock_client.delete_user.assert_called_once_with(42)
+
+        # Assert peer relation keys are cleanly deleted
+        peer_rel_out = state_out.get_relation(peer_relation.id)
+        assert "client_99_user_id" not in peer_rel_out.local_app_data
+        assert "client_99_username" not in peer_rel_out.local_app_data
+        assert "client_99_password" not in peer_rel_out.local_app_data

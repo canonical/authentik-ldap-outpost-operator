@@ -76,6 +76,7 @@ config:
       default: false
 
 
+
 actions:
 
 requires:
@@ -128,7 +129,7 @@ resources:
   oci-image:
     type: oci-image
     description: OCI image for authentik-ldap-outpost
-    upstream-source: ghcr.io/goauthentik/ldap:2026.2.2
+    upstream-source: ghcr.io/canonical/authentik-ldap-outpost:2026.5.3
 
 parts:
   charm:

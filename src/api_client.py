@@ -15,6 +15,16 @@ logger = logging.getLogger(__name__)
 class AuthentikApiError(Exception):
     """Base exception for Authentik API errors."""
 
+    def __init__(self, message: str, status_code: Optional[int] = None):
+        """Initialize the API error with optional status code.
+
+        Args:
+            message: Exception message.
+            status_code: Optional HTTP status code.
+        """
+        super().__init__(message)
+        self.status_code = status_code
+
 
 class AuthentikApiClient:
     """Client for communicating with the Authentik REST API."""
@@ -78,10 +88,34 @@ class AuthentikApiClient:
                 endpoint,
                 err_body,
             )
-            raise AuthentikApiError(f"HTTP Error {e.code}: {err_body}") from e
+            raise AuthentikApiError(f"HTTP Error {e.code}: {err_body}", status_code=e.code) from e
         except Exception as e:
             logger.error("Failed to connect to Authentik API: %s", e)
             raise AuthentikApiError(f"Connection failure: {e}") from e
+
+    def _request_all(self, endpoint: str) -> List[Any]:
+        """Fetch all results from a paginated endpoint.
+
+        Args:
+            endpoint: The relative endpoint path.
+
+        Returns:
+            A combined list of all results across all pages.
+        """
+        results = []
+        while endpoint:
+            res = self._request(endpoint)
+            results.extend(res.get("results", []))
+            next_url = res.get("next")
+            if next_url:
+                idx = next_url.find("/api/")
+                if idx != -1:
+                    endpoint = next_url[idx:]
+                else:
+                    endpoint = None
+            else:
+                endpoint = None
+        return results
 
     def _find_flow(self, flows: List[Any], slug: str, designation: str) -> Optional[str]:
         """Find a flow matching the slug or falling back to designation."""
@@ -102,19 +136,45 @@ class AuthentikApiClient:
         Raises:
             AuthentikApiError: If standard flows cannot be found.
         """
-        res = self._request("/api/v3/flows/instances/")
-        results = res.get("results", [])
+        auth_flow = None
+        inval_flow = None
 
-        auth_flow = self._find_flow(
-            results,
-            "default-provider-authorization-implicit-consent",
-            "authorization",
-        )
-        inval_flow = self._find_flow(
-            results,
-            "default-provider-invalidation-flow",
-            "invalidation",
-        )
+        # Try to resolve authorization flow directly by slug (Comment 2 pagination optimization)
+        try:
+            res = self._request(
+                "/api/v3/flows/instances/default-provider-authorization-implicit-consent/"
+            )
+            auth_flow = res.get("pk")
+        except AuthentikApiError as e:
+            if e.status_code != 404:
+                raise e
+
+        # Try to resolve invalidation flow directly by slug (Comment 2 pagination optimization)
+        try:
+            res = self._request("/api/v3/flows/instances/default-provider-invalidation-flow/")
+            inval_flow = res.get("pk")
+        except AuthentikApiError as e:
+            if e.status_code != 404:
+                raise e
+
+        # Fallback to fetching all flows only if direct resolution fails
+        if not auth_flow or not inval_flow:
+            logger.info(
+                "Could not resolve flows directly by slug; falling back to listing all flows."
+            )
+            results = self._request_all("/api/v3/flows/instances/")
+            if not auth_flow:
+                auth_flow = self._find_flow(
+                    results,
+                    "default-provider-authorization-implicit-consent",
+                    "authorization",
+                )
+            if not inval_flow:
+                inval_flow = self._find_flow(
+                    results,
+                    "default-provider-invalidation-flow",
+                    "invalidation",
+                )
 
         if not auth_flow or not inval_flow:
             raise AuthentikApiError(
@@ -136,10 +196,14 @@ class AuthentikApiClient:
         Returns:
             The UUID PK of the flow.
         """
-        flows_res = self._request("/api/v3/flows/instances/")
-        for flow in flows_res.get("results", []):
-            if flow.get("slug") == "default-ldap-bind-flow":
-                return flow.get("pk")
+        # Try to retrieve the flow directly by slug to avoid paginated listing
+        try:
+            flow = self._request("/api/v3/flows/instances/default-ldap-bind-flow/")
+            if flow_pk := flow.get("pk"):
+                return flow_pk
+        except AuthentikApiError as e:
+            if e.status_code != 404:
+                raise e
 
         logger.info("LDAP Bind Flow not found. Creating a new one.")
         flow_data = {
@@ -156,8 +220,7 @@ class AuthentikApiClient:
         if not flow_pk:
             raise AuthentikApiError("Failed to create default-ldap-bind-flow")
 
-        stages_res = self._request("/api/v3/stages/all/")
-        stages = stages_res.get("results", [])
+        stages = self._request_all("/api/v3/stages/all/")
 
         ident_stage = self._find_stage(stages, "default-authentication-identification")
         pass_stage = self._find_stage(stages, "default-authentication-password")
@@ -206,10 +269,10 @@ class AuthentikApiClient:
         Returns:
             The integer primary key (ID) of the Provider.
         """
-        providers_res = self._request("/api/v3/providers/ldap/")
+        providers = self._request_all("/api/v3/providers/ldap/")
         provider_pk = None
 
-        for prov in providers_res.get("results", []):
+        for prov in providers:
             if prov.get("name") == name:
                 provider_pk = prov.get("pk")
                 break
@@ -245,6 +308,32 @@ class AuthentikApiClient:
 
         return provider_pk
 
+    def update_provider_config(
+        self,
+        provider_pk: int,
+        base_dn: str,
+        search_mode: str,
+        bind_mode: str,
+        mfa_support: bool,
+    ) -> None:
+        """Update an existing LDAP Provider's configuration directly.
+
+        Args:
+            provider_pk: The ID of the LDAP Provider to update.
+            base_dn: The Base DN of the directory.
+            search_mode: The directory search mode.
+            bind_mode: The bind access mode.
+            mfa_support: Whether MFA is enabled.
+        """
+        provider_data = {
+            "base_dn": base_dn,
+            "search_mode": search_mode,
+            "bind_mode": bind_mode,
+            "mfa_support": mfa_support,
+        }
+        logger.info("Updating LDAP Provider '%s' configuration.", provider_pk)
+        self._request(f"/api/v3/providers/ldap/{provider_pk}/", method="PATCH", data=provider_data)
+
     def get_or_create_outpost(self, name: str, provider_pk: int) -> Tuple[str, str]:
         """Find or create an LDAP Outpost, ensuring the provider is bound.
 
@@ -255,12 +344,12 @@ class AuthentikApiClient:
         Returns:
             A tuple of (outpost_uuid, token_identifier).
         """
-        outposts_res = self._request("/api/v3/outposts/instances/")
+        outposts = self._request_all("/api/v3/outposts/instances/")
         outpost_pk = None
         token_identifier = None
         existing_providers: List[int] = []
 
-        for op in outposts_res.get("results", []):
+        for op in outposts:
             if op.get("name") == name:
                 outpost_pk = op.get("pk")
                 token_identifier = op.get("token_identifier")
@@ -394,7 +483,22 @@ class AuthentikApiClient:
             self._request(f"/api/v3/core/users/{user_pk}/", method="DELETE")
         except AuthentikApiError as e:
             # If already deleted, ignore
-            if "404" in str(e):
+            if e.status_code == 404:
                 logger.warning("User ID %s already deleted.", user_pk)
             else:
                 raise e
+
+    def check_outpost_exists(self, outpost_uuid: str) -> bool:
+        """Check if an outpost exists by its UUID.
+
+        Args:
+            outpost_uuid: The UUID of the outpost.
+
+        Returns:
+            True if the outpost exists.
+
+        Raises:
+            AuthentikApiError: If the outpost is not found or request fails.
+        """
+        self._request(f"/api/v3/outposts/instances/{outpost_uuid}/")
+        return True

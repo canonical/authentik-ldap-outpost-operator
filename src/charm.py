@@ -4,6 +4,7 @@
 
 """Charm the Authentik LDAP outpost application."""
 
+import json
 import logging
 import secrets
 from dataclasses import dataclass
@@ -101,6 +102,8 @@ class AuthentikLdapCharm(ops.CharmBase):
         for event in [
             self.on.install,
             self.on.config_changed,
+            self.on.leader_elected,
+            self.on.update_status,
             self.on[PEER_RELATION].relation_joined,
             self.on[PEER_RELATION].relation_changed,
             self.on[LDAP_RELATION].relation_joined,
@@ -153,6 +156,22 @@ class AuthentikLdapCharm(ops.CharmBase):
         """The peer relation."""
         return self.model.get_relation(PEER_RELATION)
 
+    @property
+    def _pebble_layer(self) -> ops.pebble.Layer:
+        """Build the pebble layer from all env var sources."""
+        info = self.server_info.get_info()
+        outpost_token = self._get_peer_data("outpost_token")
+        if not info or not outpost_token:
+            outpost_env = OutpostEnv(host="", token="")
+        else:
+            outpost_env = OutpostEnv(host=info.host, token=outpost_token)
+
+        return self._pebble.render_pebble_layer(
+            outpost_env,
+            self._config,
+            TracingData.load(self.tracing_requirer),
+        )
+
     def _set_peer_data(self, key: str, value: str) -> None:
         """Set a value in the peer relation application databag."""
         if not self.unit.is_leader():
@@ -181,8 +200,55 @@ class AuthentikLdapCharm(ops.CharmBase):
         bind_mode = self.model.config.get("bind_mode", "direct")
         mfa_support = bool(self.model.config.get("mfa_support", False))
 
-        # Create Authentik API Client
+        provider_pk_peer = self._get_peer_data("provider_pk")
+        outpost_uuid_peer = self._get_peer_data("outpost_uuid")
+        outpost_token_peer = self._get_peer_data("outpost_token")
+
+        last_base_dn = self._get_peer_data("last_base_dn")
+        last_search_mode = self._get_peer_data("last_search_mode")
+        last_bind_mode = self._get_peer_data("last_bind_mode")
+        last_mfa_support = self._get_peer_data("last_mfa_support")
+
+        config_unchanged = (
+            last_base_dn == base_dn
+            and last_search_mode == search_mode
+            and last_bind_mode == bind_mode
+            and last_mfa_support == str(mfa_support)
+        )
+
         client = AuthentikApiClient(info.host, info.bootstrap_token)
+
+        if provider_pk_peer and outpost_uuid_peer and outpost_token_peer:
+            try:
+                client.check_outpost_exists(outpost_uuid_peer)
+                if config_unchanged:
+                    logger.debug(
+                        "Authentik resources are already provisioned and configuration is up to date."
+                    )
+                    return
+
+                # If config has changed, we only need to update the Provider directly
+                logger.info("Configuration changed. Updating existing LDAP Provider config.")
+                client.update_provider_config(
+                    provider_pk=int(provider_pk_peer),
+                    base_dn=base_dn,
+                    search_mode=search_mode,
+                    bind_mode=bind_mode,
+                    mfa_support=mfa_support,
+                )
+
+                # Store config values in peer relation to track changes
+                self._set_peer_data("last_base_dn", base_dn or "")
+                self._set_peer_data("last_search_mode", search_mode or "")
+                self._set_peer_data("last_bind_mode", bind_mode or "")
+                self._set_peer_data("last_mfa_support", str(mfa_support))
+
+                logger.info("Successfully updated Authentik LDAP Provider configuration.")
+                return
+            except Exception as e:
+                logger.warning(
+                    "Failed to verify or update existing resources, re-provisioning: %s", e
+                )
 
         # Create/Sync Provider
         provider_name = f"ldap-provider-{self.app.name}"
@@ -209,42 +275,115 @@ class AuthentikLdapCharm(ops.CharmBase):
         self._set_peer_data("outpost_uuid", outpost_pk)
         self._set_peer_data("outpost_token", outpost_token)
 
+        # Store config values in peer relation to track changes
+        self._set_peer_data("last_base_dn", base_dn or "")
+        self._set_peer_data("last_search_mode", search_mode or "")
+        self._set_peer_data("last_bind_mode", bind_mode or "")
+        self._set_peer_data("last_mfa_support", str(mfa_support))
+
         logger.info(
             "Successfully provisioned Authentik resources: Provider ID %s, Outpost UUID %s",
             provider_pk,
             outpost_pk,
         )
 
+    def _get_tracked_relation_ids(self) -> set[int]:
+        """Get relation IDs tracked in the peer relation.
+
+        Returns:
+            set[int]: Set of tracked relation IDs.
+        """
+        peers = self._peers
+        if not peers:
+            return set()
+
+        tracked = set()
+        for key in peers.data[self.app]:
+            if key.startswith("client_"):
+                try:
+                    parts = key.split("_")
+                    if len(parts) == 2:
+                        tracked.add(int(parts[1]))
+                    elif key.endswith("_user_id"):
+                        tracked.add(int(parts[1]))
+                except ValueError:
+                    continue
+        return tracked
+
+    def _get_relation_credentials(self, relation_id: int) -> dict[str, str]:
+        """Get the credentials for a given relation ID from peer data.
+
+        Handles both new JSON format and legacy separate keys.
+
+        Returns:
+            dict[str, str]: Dictionary containing user_id, username, password.
+        """
+        data_str = self._get_peer_data(f"client_{relation_id}")
+        if data_str:
+            try:
+                return json.loads(data_str)
+            except Exception:
+                pass
+
+        return {
+            "user_id": self._get_peer_data(f"client_{relation_id}_user_id") or "",
+            "username": self._get_peer_data(f"client_{relation_id}_username") or "",
+            "password": self._get_peer_data(f"client_{relation_id}_password") or "",
+        }
+
+    def _delete_orphaned_relation(self, client: AuthentikApiClient, relation_id: int) -> None:
+        """Delete an orphaned relation's service account and clear peer data."""
+        creds = self._get_relation_credentials(relation_id)
+        user_id = creds.get("user_id")
+        if user_id:
+            try:
+                client.delete_user(int(user_id))
+                logger.info(
+                    "Successfully deleted Authentik service account user ID %s for relation %s",
+                    user_id,
+                    relation_id,
+                )
+            except Exception as e:
+                logger.error(
+                    "Failed to delete Service Account for relation %s: %s",
+                    relation_id,
+                    e,
+                )
+
+        peers = self._peers
+        if peers:
+            key = f"client_{relation_id}"
+            if key in peers.data[self.app]:
+                del peers.data[self.app][key]
+            for suffix in ["user_id", "username", "password"]:
+                legacy_key = f"client_{relation_id}_{suffix}"
+                if legacy_key in peers.data[self.app]:
+                    del peers.data[self.app][legacy_key]
+
+    def _cleanup_orphaned_relations(self) -> None:
+        """Identify and clean up Authentik service accounts for broken LDAP relations."""
+        if not self.unit.is_leader():
+            return
+
+        # Find active relation IDs
+        active_relations = self.model.relations.get(LDAP_RELATION, [])
+        active_relation_ids = {rel.id for rel in active_relations}
+
+        tracked_relation_ids = self._get_tracked_relation_ids()
+        orphaned_ids = tracked_relation_ids - active_relation_ids
+        if not orphaned_ids:
+            return
+
+        info = self.server_info.get_info()
+        if not info:
+            return
+
+        client = AuthentikApiClient(info.host, info.bootstrap_token)
+        for relation_id in orphaned_ids:
+            self._delete_orphaned_relation(client, relation_id)
+
     def _on_ldap_relation_broken(self, event: ops.RelationBrokenEvent) -> None:
         """Handle the relation broken event for LDAP consumers."""
-        if self.unit.is_leader():
-            relation_id = event.relation.id
-            user_id = self._get_peer_data(f"client_{relation_id}_user_id")
-            if user_id:
-                info = self.server_info.get_info()
-                if info:
-                    try:
-                        client = AuthentikApiClient(info.host, info.bootstrap_token)
-                        client.delete_user(int(user_id))
-                        logger.info(
-                            "Successfully deleted Authentik service account user ID %s for relation %s",
-                            user_id,
-                            relation_id,
-                        )
-                    except Exception as e:
-                        logger.error(
-                            "Failed to delete Service Account for relation %s: %s",
-                            relation_id,
-                            e,
-                        )
-
-                # Clean up peer data
-                if peers := self._peers:
-                    for suffix in ["user_id", "username", "password"]:
-                        key = f"client_{relation_id}_{suffix}"
-                        if key in peers.data[self.app]:
-                            del peers.data[self.app][key]
-
         self._on_holistic_handler(event)
 
     def _on_holistic_handler(self, event: ops.EventBase) -> None:
@@ -253,27 +392,28 @@ class AuthentikLdapCharm(ops.CharmBase):
         self._holistic_handler(event)
 
     def _holistic_handler(self, event: ops.EventBase) -> None:
-        """Run holistic reconciliation."""
+        """Centralized reconciliation handler."""
         if not all(condition(self) for condition in NOOP_CONDITIONS):
             return
 
-        if self.unit.is_leader():
+        can_plan = True
+        for f in [
+            self._ensure_authentik_resources,
+            self._ensure_ldap_provider,
+        ]:
             try:
-                self._provision_authentik_resources()
-                self._api_error = None
+                can_plan = can_plan and f()
             except Exception as e:
-                self._api_error = f"API error: {e}"
-                logger.error("Error during resource provisioning: %s", e)
-                return
+                logger.exception("Error in %s: %s", f.__name__, e)
+                can_plan = False
 
-        if not self._get_peer_data("outpost_token"):
-            logger.info(
-                "Outpost token not available in peer data yet; skipping Pebble layer planning"
-            )
+        if not can_plan:
             return
 
-        self._ensure_pebble_layer()
-        self._ensure_ldap_provider()
+        try:
+            self._pebble.plan(self._pebble_layer)
+        except PebbleError as e:
+            logger.error("Failed to plan Pebble layer: %s", e)
 
     def _on_collect_status(self, event: ops.CollectStatusEvent) -> None:
         """Collect unit status."""
@@ -307,45 +447,82 @@ class AuthentikLdapCharm(ops.CharmBase):
 
         event.add_status(ops.ActiveStatus())
 
-    def _ensure_pebble_layer(self) -> None:
-        """Ensure the Pebble layer is applied."""
-        info = self.server_info.get_info()
-        outpost_token = self._get_peer_data("outpost_token")
-        if not info or not outpost_token:
-            return
+    def _ensure_authentik_resources(self) -> bool:
+        """Ensure the Upstream Provider and Outpost on Authentik are provisioned.
 
-        outpost_env = OutpostEnv(host=info.host, token=outpost_token)
-        layer = self._pebble.render_pebble_layer(
-            outpost_env,
-            self._config,
-            TracingData.load(self.tracing_requirer),
+        Returns:
+            bool: True if provisioning succeeded and we have the token.
+        """
+        if self.unit.is_leader():
+            try:
+                self._provision_authentik_resources()
+                self._api_error = None
+            except Exception as e:
+                self._api_error = f"API error: {e}"
+                logger.error("Error during resource provisioning: %s", e)
+                return False
+
+        return bool(self._get_peer_data("outpost_token"))
+
+    def _update_ldap_relation(self, relation: ops.Relation, address: str) -> bool:
+        """Update a single LDAP relation's credentials and data.
+
+        Returns:
+            bool: True if relation was successfully updated, False if waiting or errored.
+        """
+        relation_id = relation.id
+
+        creds = self._get_relation_credentials(relation_id)
+        user_id = creds.get("user_id")
+
+        if self.unit.is_leader() and not user_id:
+            self._provision_service_account(relation_id)
+            if self._api_error:
+                return False
+            creds = self._get_relation_credentials(relation_id)
+            user_id = creds.get("user_id")
+
+        username = creds.get("username")
+        password = creds.get("password")
+
+        if not (user_id and username and password):
+            logger.info(
+                "Waiting for peer relation to provide credentials for relation %s",
+                relation_id,
+            )
+            return False
+
+        base_dn = self.model.config.get("base_dn")
+        bind_dn = f"cn={username},ou=users,{base_dn}"
+
+        self.ldap_provider.update_relation_data(
+            relation_id=relation_id,
+            unit_address=address,
+            base_dn=base_dn,
+            bind_dn=bind_dn,
+            password=password,
         )
-        try:
-            self._container.add_layer(WORKLOAD_CONTAINER, layer, combine=True)
-            relations = self.model.relations.get(LDAP_RELATION, [])
-            if relations:
-                try:
-                    self._pebble.plan(layer)
-                except PebbleError as e:
-                    logger.error("Failed to plan Pebble layer: %s", e)
-            else:
-                try:
-                    service = self._container.get_service(WORKLOAD_CONTAINER)
-                    if service.is_running():
-                        self._container.stop(WORKLOAD_CONTAINER)
-                except Exception:
-                    pass
-        except Exception as e:
-            logger.error("Failed to add Pebble layer: %s", e)
+        return True
 
-    def _ensure_ldap_provider(self) -> None:
-        """Ensure LDAP provider relation data is updated for all consumers."""
+    def _ensure_ldap_provider(self) -> bool:
+        """Ensure LDAP provider relation data is updated for all consumers.
+
+        Returns:
+            bool: True if the provider is fully configured.
+        """
         if not self.server_info.is_ready():
-            return
+            return False
+
+        # Clean up any orphaned relations
+        if self.unit.is_leader():
+            try:
+                self._cleanup_orphaned_relations()
+            except Exception as e:
+                logger.error("Failed to clean up orphaned relations: %s", e)
 
         relations = self.model.relations.get(LDAP_RELATION, [])
         if not relations:
-            return
+            return True
 
         url = self.ingress.ldap_requirer.url
         if url:
@@ -354,37 +531,12 @@ class AuthentikLdapCharm(ops.CharmBase):
         else:
             address = str(self.model.get_binding(LDAP_RELATION).network.bind_address)
 
+        success = True
         for relation in relations:
-            relation_id = relation.id
+            if not self._update_ldap_relation(relation, address):
+                success = False
 
-            if self.unit.is_leader():
-                user_id = self._get_peer_data(f"client_{relation_id}_user_id")
-                if not user_id:
-                    self._provision_service_account(relation_id)
-                    if self._api_error:
-                        return
-
-            user_id = self._get_peer_data(f"client_{relation_id}_user_id")
-            username = self._get_peer_data(f"client_{relation_id}_username")
-            password = self._get_peer_data(f"client_{relation_id}_password")
-
-            if not (user_id and username and password):
-                logger.info(
-                    "Waiting for peer relation to provide credentials for relation %s",
-                    relation_id,
-                )
-                continue
-
-            base_dn = self.model.config.get("base_dn")
-            bind_dn = f"cn={username},ou=users,{base_dn}"
-
-            self.ldap_provider.update_relation_data(
-                relation_id=relation_id,
-                unit_address=address,
-                base_dn=base_dn,
-                bind_dn=bind_dn,
-                password=password,
-            )
+        return success
 
     def _provision_service_account(self, relation_id: int) -> None:
         """Provision an Authentik Service Account for a given relation ID."""
@@ -411,9 +563,12 @@ class AuthentikLdapCharm(ops.CharmBase):
                         search_group_name,
                     )
 
-            self._set_peer_data(f"client_{relation_id}_user_id", str(user_pk))
-            self._set_peer_data(f"client_{relation_id}_username", username)
-            self._set_peer_data(f"client_{relation_id}_password", password)
+            payload = json.dumps({
+                "user_id": str(user_pk),
+                "username": username,
+                "password": password,
+            })
+            self._set_peer_data(f"client_{relation_id}", payload)
             logger.info(
                 "Successfully provisioned Service Account '%s' (ID %s) for relation %s",
                 username,
