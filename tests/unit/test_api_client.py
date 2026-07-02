@@ -3,13 +3,10 @@
 
 """Unit tests for Authentik REST API client."""
 
-import json
-import urllib.error
-import urllib.request
-from io import BytesIO
 from unittest.mock import MagicMock, patch
 
 import pytest
+import responses
 
 from api_client import AuthentikApiClient, AuthentikApiError
 
@@ -17,79 +14,143 @@ from api_client import AuthentikApiClient, AuthentikApiError
 class TestAuthentikApiClient:
     """Tests for AuthentikApiClient."""
 
+    @pytest.fixture(autouse=True)
+    def fast_retries(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Mock time.sleep, time.time, and time.monotonic to make tenacity retries instantaneous and correct."""
+        current_time = [0.0]
+
+        def mock_sleep(seconds: float) -> None:
+            current_time[0] += seconds
+
+        def mock_time() -> float:
+            return current_time[0]
+
+        monkeypatch.setattr("time.sleep", mock_sleep)
+        monkeypatch.setattr("time.time", mock_time)
+        monkeypatch.setattr("time.monotonic", mock_time)
+
     @pytest.fixture
     def client(self) -> AuthentikApiClient:
         """Fixture for AuthentikApiClient."""
         return AuthentikApiClient(host="http://authentik:9000", token="secret-token")
 
-    @patch("urllib.request.urlopen")
-    def test_request_success(self, mock_urlopen: MagicMock, client: AuthentikApiClient) -> None:
-        """Test successful GET request."""
-        mock_response = MagicMock()
-        mock_response.status = 200
-        mock_response.read.return_value = b'{"status": "ok"}'
-        mock_urlopen.return_value.__enter__.return_value = mock_response
+    @pytest.fixture
+    def mock_request_success(self) -> None:
+        """Fixture to mock successful GET request."""
+        responses.add(
+            responses.GET,
+            "http://authentik:9000/api/v3/test/",
+            json={"status": "ok"},
+            status=200,
+        )
 
+    @pytest.fixture
+    def mock_request_delete_success(self) -> None:
+        """Fixture to mock successful DELETE request."""
+        responses.add(
+            responses.DELETE,
+            "http://authentik:9000/api/v3/test/",
+            status=204,
+        )
+
+    @pytest.fixture
+    def mock_request_http_error(self) -> None:
+        """Fixture to mock HTTP 404 Not Found error."""
+        responses.add(
+            responses.GET,
+            "http://authentik:9000/api/v3/test/",
+            body="Not Found",
+            status=404,
+        )
+
+    @pytest.fixture
+    def mock_request_all_pagination(self) -> None:
+        """Fixture to mock paginated GET requests."""
+        responses.add(
+            responses.GET,
+            "http://authentik:9000/api/v3/test/",
+            json={
+                "results": [{"pk": "1"}],
+                "next": "http://authentik:9000/api/v3/test/?page=2",
+            },
+            status=200,
+        )
+        responses.add(
+            responses.GET,
+            "http://authentik:9000/api/v3/test/?page=2",
+            json={
+                "results": [{"pk": "2"}],
+                "next": None,
+            },
+            status=200,
+        )
+
+    @pytest.fixture
+    def mock_flow_resolution_failure(self) -> None:
+        """Fixture to mock flow resolution failure with 404s and empty flow list."""
+        responses.add(
+            responses.GET,
+            "http://authentik:9000/api/v3/flows/instances/default-provider-authorization-implicit-consent/",
+            status=404,
+        )
+        responses.add(
+            responses.GET,
+            "http://authentik:9000/api/v3/flows/instances/default-provider-invalidation-flow/",
+            status=404,
+        )
+        responses.add(
+            responses.GET,
+            "http://authentik:9000/api/v3/flows/instances/",
+            json={"results": []},
+            status=200,
+        )
+
+    @pytest.fixture
+    def mock_flow_resolution_success(self) -> None:
+        """Fixture to mock successful flow resolution."""
+        responses.add(
+            responses.GET,
+            "http://authentik:9000/api/v3/flows/instances/default-provider-authorization-implicit-consent/",
+            json={"pk": "auth-uuid"},
+            status=200,
+        )
+        responses.add(
+            responses.GET,
+            "http://authentik:9000/api/v3/flows/instances/default-provider-invalidation-flow/",
+            json={"pk": "inval-uuid"},
+            status=200,
+        )
+
+    @responses.activate
+    def test_request_success(self, client: AuthentikApiClient, mock_request_success: None) -> None:
+        """Test successful GET request."""
         res = client._request("/api/v3/test/")
         assert res == {"status": "ok"}
-        mock_urlopen.assert_called_once()
 
-    @patch("urllib.request.urlopen")
+    @responses.activate
     def test_request_delete_success(
-        self, mock_urlopen: MagicMock, client: AuthentikApiClient
+        self, client: AuthentikApiClient, mock_request_delete_success: None
     ) -> None:
         """Test successful DELETE request returns True."""
-        mock_response = MagicMock()
-        mock_response.status = 204
-        mock_urlopen.return_value.__enter__.return_value = mock_response
-
         res = client._request("/api/v3/test/", method="DELETE")
         assert res is True
 
-    @patch("urllib.request.urlopen")
+    @responses.activate
     def test_request_http_error_stores_status_code(
-        self, mock_urlopen: MagicMock, client: AuthentikApiClient
+        self, client: AuthentikApiClient, mock_request_http_error: None
     ) -> None:
         """Test HTTPError raises AuthentikApiError with status code."""
-        # Create an HTTPError with code 404
-        fp = BytesIO(b"Not Found")
-        mock_urlopen.side_effect = urllib.error.HTTPError(
-            url="http://authentik:9000/api/v3/test/",
-            code=404,
-            msg="Not Found",
-            hdrs=urllib.request.Request("http://authentik:9000/api/v3/test/").headers,
-            fp=fp,
-        )
-
         with pytest.raises(AuthentikApiError) as exc_info:
             client._request("/api/v3/test/")
 
         assert exc_info.value.status_code == 404
         assert "HTTP Error 404" in str(exc_info.value)
 
-    @patch("urllib.request.urlopen")
+    @responses.activate
     def test_request_all_pagination(
-        self, mock_urlopen: MagicMock, client: AuthentikApiClient
+        self, client: AuthentikApiClient, mock_request_all_pagination: None
     ) -> None:
         """Test that _request_all retrieves all pages correctly."""
-        mock_response1 = MagicMock()
-        mock_response1.read.return_value = json.dumps({
-            "results": [{"pk": "1"}],
-            "next": "http://authentik:9000/api/v3/test/?page=2",
-        }).encode("utf-8")
-
-        mock_response2 = MagicMock()
-        mock_response2.read.return_value = json.dumps({
-            "results": [{"pk": "2"}],
-            "next": None,
-        }).encode("utf-8")
-
-        mock_urlopen.side_effect = [
-            mock_urlopen.return_value,
-            mock_urlopen.return_value,
-        ]
-        mock_urlopen.return_value.__enter__.side_effect = [mock_response1, mock_response2]
-
         results = client._request_all("/api/v3/test/")
         assert results == [{"pk": "1"}, {"pk": "2"}]
 
@@ -133,6 +194,31 @@ class TestAuthentikApiClient:
         assert auth_uuid == "auth-uuid"
         assert inval_uuid == "inval-uuid"
         mock_request_all.assert_called_with("/api/v3/flows/instances/")
+
+    @responses.activate
+    def test_resolve_flow_ids_retries_on_404(
+        self,
+        client: AuthentikApiClient,
+        mock_flow_resolution_failure: None,
+        mock_flow_resolution_success: None,
+    ) -> None:
+        """Test that resolve_flow_ids retries on 404 errors and eventually succeeds."""
+        auth_uuid, inval_uuid = client.resolve_flow_ids()
+
+        assert auth_uuid == "auth-uuid"
+        assert inval_uuid == "inval-uuid"
+
+    @responses.activate
+    def test_resolve_flow_ids_times_out(
+        self, client: AuthentikApiClient, mock_flow_resolution_failure: None
+    ) -> None:
+        """Test that resolve_flow_ids eventually times out and raises AuthentikApiError on persistent 404."""
+        with pytest.raises(AuthentikApiError) as exc_info:
+            client.resolve_flow_ids()
+
+        assert "Could not resolve default authorization or invalidation flows" in str(
+            exc_info.value
+        )
 
     @patch.object(AuthentikApiClient, "_request")
     def test_get_or_create_ldap_bind_flow_direct_slug_success(
@@ -199,3 +285,43 @@ class TestAuthentikApiClient:
         # Should not raise exception
         client.delete_user(42)
         mock_request.assert_called_once_with("/api/v3/core/users/42/", method="DELETE")
+
+    @patch.object(AuthentikApiClient, "_request_all")
+    @patch.object(AuthentikApiClient, "_request")
+    def test_get_or_create_application_exists_patches(
+        self, mock_request: MagicMock, mock_request_all: MagicMock, client: AuthentikApiClient
+    ) -> None:
+        """Test get_or_create_application updates existing application."""
+        mock_request_all.return_value = [
+            {"name": "test-app", "slug": "test-app-slug", "pk": 10},
+        ]
+        mock_request.return_value = {}
+
+        client.get_or_create_application("test-app", "test-app-slug", 5)
+
+        mock_request_all.assert_called_once_with("/api/v3/core/applications/?search=test-app-slug")
+        mock_request.assert_called_once_with(
+            "/api/v3/core/applications/test-app-slug/",
+            method="PATCH",
+            data={"name": "test-app", "slug": "test-app-slug", "provider": 5},
+        )
+
+    @patch.object(AuthentikApiClient, "_request_all")
+    @patch.object(AuthentikApiClient, "_request")
+    def test_get_or_create_application_new_posts(
+        self, mock_request: MagicMock, mock_request_all: MagicMock, client: AuthentikApiClient
+    ) -> None:
+        """Test get_or_create_application creates new application if missing."""
+        mock_request_all.return_value = [
+            {"name": "other-app", "slug": "other-app-slug", "pk": 12},
+        ]
+        mock_request.return_value = {}
+
+        client.get_or_create_application("test-app", "test-app-slug", 5)
+
+        mock_request_all.assert_called_once_with("/api/v3/core/applications/?search=test-app-slug")
+        mock_request.assert_called_once_with(
+            "/api/v3/core/applications/",
+            method="POST",
+            data={"name": "test-app", "slug": "test-app-slug", "provider": 5},
+        )

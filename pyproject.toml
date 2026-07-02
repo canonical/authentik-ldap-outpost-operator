@@ -29,6 +29,7 @@ unit = [
     "pytest-mock",
     "coverage[toml]",
     "jsonschema",
+    "responses",
 ]
 integration = [
     "jubilant",

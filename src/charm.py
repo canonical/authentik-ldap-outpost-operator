@@ -185,6 +185,145 @@ class AuthentikLdapCharm(ops.CharmBase):
             return peers.data[self.app].get(key)
         return None
 
+    def _set_peer_config_metadata(
+        self,
+        base_dn: Optional[str],
+        search_mode: str,
+        bind_mode: str,
+        mfa_support: bool,
+    ) -> None:
+        """Store config values in peer relation to track changes.
+
+        Args:
+            base_dn: The Base DN of the directory.
+            search_mode: The directory search mode.
+            bind_mode: The bind access mode.
+            mfa_support: Whether MFA is enabled.
+        """
+        self._set_peer_data("last_base_dn", base_dn or "")
+        self._set_peer_data("last_search_mode", search_mode or "")
+        self._set_peer_data("last_bind_mode", bind_mode or "")
+        self._set_peer_data("last_mfa_support", str(mfa_support))
+
+    def _verify_and_update_existing_resources(
+        self,
+        client: AuthentikApiClient,
+        provider_pk_peer: Optional[str],
+        outpost_uuid_peer: Optional[str],
+        outpost_token_peer: Optional[str],
+        base_dn: Optional[str],
+        search_mode: str,
+        bind_mode: str,
+        mfa_support: bool,
+        config_unchanged: bool,
+    ) -> bool:
+        """Verify the existing outpost resources and update provider config if changed.
+
+        Args:
+            client: The AuthentikApiClient instance.
+            provider_pk_peer: Cached provider primary key.
+            outpost_uuid_peer: Cached outpost UUID.
+            outpost_token_peer: Cached outpost token.
+            base_dn: The Base DN of the directory.
+            search_mode: The directory search mode.
+            bind_mode: The bind access mode.
+            mfa_support: Whether MFA is enabled.
+            config_unchanged: True if configuration matches cached values.
+
+        Returns:
+            bool: True if resources are successfully verified/updated and up to date.
+                  False if validation failed or re-provisioning is required.
+        """
+        if not (provider_pk_peer and outpost_uuid_peer and outpost_token_peer):
+            return False
+
+        try:
+            client.check_outpost_exists(outpost_uuid_peer)
+            if config_unchanged:
+                logger.debug(
+                    "Authentik resources are already provisioned and configuration is up to date."
+                )
+                return True
+
+            # If config has changed, we only need to update the Provider directly
+            logger.info("Configuration changed. Updating existing LDAP Provider config.")
+            client.update_provider_config(
+                provider_pk=int(provider_pk_peer),
+                base_dn=base_dn or "",
+                search_mode=search_mode,
+                bind_mode=bind_mode,
+                mfa_support=mfa_support,
+            )
+
+            # Store config values in peer relation to track changes
+            self._set_peer_config_metadata(base_dn, search_mode, bind_mode, mfa_support)
+
+            logger.info("Successfully updated Authentik LDAP Provider configuration.")
+            return True
+        except Exception as e:
+            logger.warning("Failed to verify or update existing resources, re-provisioning: %s", e)
+            return False
+
+    def _provision_fresh_resources(
+        self,
+        client: AuthentikApiClient,
+        base_dn: Optional[str],
+        search_mode: str,
+        bind_mode: str,
+        mfa_support: bool,
+    ) -> None:
+        """Create and sync fresh Provider, Application, and Outpost resources on Authentik.
+
+        Args:
+            client: The AuthentikApiClient instance.
+            base_dn: The Base DN of the directory.
+            search_mode: The directory search mode.
+            bind_mode: The bind access mode.
+            mfa_support: Whether MFA is enabled.
+        """
+        # Create/Sync Provider
+        provider_name = f"ldap-provider-{self.app.name}"
+        provider_pk = client.get_or_create_provider(
+            name=provider_name,
+            base_dn=base_dn or "",
+            search_mode=search_mode,
+            bind_mode=bind_mode,
+            mfa_support=mfa_support,
+        )
+
+        # Create/Sync Application to bind Provider
+        app_name = f"ldap-app-{self.app.name}"
+        app_slug = f"ldap-app-{self.app.name}"
+        client.get_or_create_application(
+            name=app_name,
+            slug=app_slug,
+            provider_pk=provider_pk,
+        )
+
+        # Create/Sync Outpost
+        outpost_name = f"ldap-outpost-{self.app.name}"
+        outpost_pk, token_identifier = client.get_or_create_outpost(
+            name=outpost_name,
+            provider_pk=provider_pk,
+        )
+
+        # Retrieve Outpost Token Key
+        outpost_token = client.get_token_key(token_identifier)
+
+        # Store in peer relation
+        self._set_peer_data("provider_pk", str(provider_pk))
+        self._set_peer_data("outpost_uuid", outpost_pk)
+        self._set_peer_data("outpost_token", outpost_token)
+
+        # Store config values in peer relation to track changes
+        self._set_peer_config_metadata(base_dn, search_mode, bind_mode, mfa_support)
+
+        logger.info(
+            "Successfully provisioned Authentik resources: Provider ID %s, Outpost UUID %s",
+            provider_pk,
+            outpost_pk,
+        )
+
     def _provision_authentik_resources(self) -> None:
         """Provision the Upstream Provider and Outpost on Authentik."""
         if not self.unit.is_leader():
@@ -218,73 +357,25 @@ class AuthentikLdapCharm(ops.CharmBase):
 
         client = AuthentikApiClient(info.host, info.bootstrap_token)
 
-        if provider_pk_peer and outpost_uuid_peer and outpost_token_peer:
-            try:
-                client.check_outpost_exists(outpost_uuid_peer)
-                if config_unchanged:
-                    logger.debug(
-                        "Authentik resources are already provisioned and configuration is up to date."
-                    )
-                    return
-
-                # If config has changed, we only need to update the Provider directly
-                logger.info("Configuration changed. Updating existing LDAP Provider config.")
-                client.update_provider_config(
-                    provider_pk=int(provider_pk_peer),
-                    base_dn=base_dn,
-                    search_mode=search_mode,
-                    bind_mode=bind_mode,
-                    mfa_support=mfa_support,
-                )
-
-                # Store config values in peer relation to track changes
-                self._set_peer_data("last_base_dn", base_dn or "")
-                self._set_peer_data("last_search_mode", search_mode or "")
-                self._set_peer_data("last_bind_mode", bind_mode or "")
-                self._set_peer_data("last_mfa_support", str(mfa_support))
-
-                logger.info("Successfully updated Authentik LDAP Provider configuration.")
-                return
-            except Exception as e:
-                logger.warning(
-                    "Failed to verify or update existing resources, re-provisioning: %s", e
-                )
-
-        # Create/Sync Provider
-        provider_name = f"ldap-provider-{self.app.name}"
-        provider_pk = client.get_or_create_provider(
-            name=provider_name,
+        if self._verify_and_update_existing_resources(
+            client=client,
+            provider_pk_peer=provider_pk_peer,
+            outpost_uuid_peer=outpost_uuid_peer,
+            outpost_token_peer=outpost_token_peer,
             base_dn=base_dn,
             search_mode=search_mode,
             bind_mode=bind_mode,
             mfa_support=mfa_support,
-        )
+            config_unchanged=config_unchanged,
+        ):
+            return
 
-        # Create/Sync Outpost
-        outpost_name = f"ldap-outpost-{self.app.name}"
-        outpost_pk, token_identifier = client.get_or_create_outpost(
-            name=outpost_name,
-            provider_pk=provider_pk,
-        )
-
-        # Retrieve Outpost Token Key
-        outpost_token = client.get_token_key(token_identifier)
-
-        # Store in peer relation
-        self._set_peer_data("provider_pk", str(provider_pk))
-        self._set_peer_data("outpost_uuid", outpost_pk)
-        self._set_peer_data("outpost_token", outpost_token)
-
-        # Store config values in peer relation to track changes
-        self._set_peer_data("last_base_dn", base_dn or "")
-        self._set_peer_data("last_search_mode", search_mode or "")
-        self._set_peer_data("last_bind_mode", bind_mode or "")
-        self._set_peer_data("last_mfa_support", str(mfa_support))
-
-        logger.info(
-            "Successfully provisioned Authentik resources: Provider ID %s, Outpost UUID %s",
-            provider_pk,
-            outpost_pk,
+        self._provision_fresh_resources(
+            client=client,
+            base_dn=base_dn,
+            search_mode=search_mode,
+            bind_mode=bind_mode,
+            mfa_support=mfa_support,
         )
 
     def _get_tracked_relation_ids(self) -> set[int]:

@@ -6,9 +6,8 @@ from typing import Callable, Iterator
 
 import jubilant
 import yaml
+from integration.constants import APP_NAME
 from tenacity import retry, stop_after_attempt, wait_exponential
-
-from tests.integration.constants import APP_NAME
 
 StatusPredicate = Callable[[jubilant.Status], bool]
 

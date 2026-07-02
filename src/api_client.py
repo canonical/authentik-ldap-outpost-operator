@@ -1,13 +1,14 @@
 # Copyright 2026 Canonical Ltd.
 # See LICENSE file for licensing details.
 
-"""Authentik REST API client using standard libraries."""
+"""Authentik REST API client using requests."""
 
-import json
 import logging
-import urllib.error
-import urllib.request
 from typing import Any, List, Optional, Tuple
+from urllib.parse import quote, urlparse
+
+import requests
+import tenacity
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +40,59 @@ class AuthentikApiClient:
         self._host = host.rstrip("/")
         self._token = token
 
+    def _do_request(self, method: str, endpoint: str, data: Optional[Any] = None) -> Any:
+        """Execute a single HTTP request.
+
+        Args:
+            method: The HTTP method (GET, POST, PATCH, PUT, DELETE).
+            endpoint: The API endpoint path.
+            data: Optional dictionary or list to send as JSON payload.
+
+        Returns:
+            The parsed JSON response, or True for successful empty responses (e.g. DELETE).
+
+        Raises:
+            AuthentikApiError: If the request fails.
+        """
+        url = f"{self._host}{endpoint}"
+        headers = {
+            "Authorization": f"Bearer {self._token}",
+            "Accept": "application/json",
+        }
+
+        try:
+            response = requests.request(
+                method=method,
+                url=url,
+                headers=headers,
+                json=data,
+                timeout=15,
+            )
+            response.raise_for_status()
+            if method == "DELETE" or response.status_code == 204:
+                return True
+
+            return response.json() if response.text else {}
+        except requests.exceptions.HTTPError as e:
+            try:
+                err_body = e.response.text
+            except Exception:
+                err_body = "Could not read error body"
+            status_code = e.response.status_code if e.response is not None else None
+            logger.error(
+                "Authentik API HTTP Error %s for %s %s: %s",
+                status_code,
+                method,
+                endpoint,
+                err_body,
+            )
+            raise AuthentikApiError(
+                f"HTTP Error {status_code}: {err_body}", status_code=status_code
+            ) from e
+        except Exception as e:
+            logger.error("Failed to connect to Authentik API: %s", e)
+            raise AuthentikApiError(f"Connection failure: {e}") from e
+
     def _request(
         self,
         endpoint: str,
@@ -58,40 +112,27 @@ class AuthentikApiClient:
         Raises:
             AuthentikApiError: If the request fails.
         """
-        url = f"{self._host}{endpoint}"
-        req_data = json.dumps(data).encode("utf-8") if data is not None else None
 
-        headers = {
-            "Authorization": f"Bearer {self._token}",
-            "Accept": "application/json",
-        }
-        if req_data:
-            headers["Content-Type"] = "application/json"
-
-        req = urllib.request.Request(url, headers=headers, method=method, data=req_data)
+        def _should_retry(exception: Exception) -> bool:
+            """Determine if we should retry the API request."""
+            if isinstance(exception, AuthentikApiError):
+                if exception.status_code == 503:
+                    return True
+                if "Connection failure" in str(exception):
+                    return True
+            return False
 
         try:
-            with urllib.request.urlopen(req, timeout=15) as response:
-                if method == "DELETE" or response.status == 204:
-                    return True
-                res_content = response.read().decode("utf-8")
-                return json.loads(res_content) if res_content else {}
-        except urllib.error.HTTPError as e:
-            try:
-                err_body = e.read().decode("utf-8")
-            except Exception:
-                err_body = "Could not read error body"
-            logger.error(
-                "Authentik API HTTP Error %s for %s %s: %s",
-                e.code,
-                method,
-                endpoint,
-                err_body,
-            )
-            raise AuthentikApiError(f"HTTP Error {e.code}: {err_body}", status_code=e.code) from e
-        except Exception as e:
-            logger.error("Failed to connect to Authentik API: %s", e)
-            raise AuthentikApiError(f"Connection failure: {e}") from e
+            for attempt in tenacity.Retrying(
+                stop=tenacity.stop_after_delay(180),
+                wait=tenacity.wait_exponential(multiplier=1, min=5, max=15),
+                retry=tenacity.retry_if_exception(_should_retry),
+                reraise=True,
+            ):
+                with attempt:
+                    return self._do_request(method, endpoint, data)
+        except tenacity.RetryError as e:
+            raise AuthentikApiError(f"API request timed out: {e}") from e
 
     def _request_all(self, endpoint: str) -> List[Any]:
         """Fetch all results from a paginated endpoint.
@@ -108,11 +149,10 @@ class AuthentikApiClient:
             results.extend(res.get("results", []))
             next_url = res.get("next")
             if next_url:
-                idx = next_url.find("/api/")
-                if idx != -1:
-                    endpoint = next_url[idx:]
-                else:
-                    endpoint = None
+                parsed_url = urlparse(next_url)
+                endpoint = parsed_url.path
+                if parsed_url.query:
+                    endpoint += f"?{parsed_url.query}"
             else:
                 endpoint = None
         return results
@@ -127,8 +167,8 @@ class AuthentikApiClient:
                 return flow.get("pk")
         return None
 
-    def resolve_flow_ids(self) -> Tuple[str, str]:
-        """Dynamically find default authorization and invalidation flow UUIDs.
+    def _resolve_flow_ids_once(self) -> Tuple[str, str]:
+        """Attempt to resolve standard flow IDs once.
 
         Returns:
             A tuple of (authorization_flow_uuid, invalidation_flow_uuid).
@@ -139,7 +179,7 @@ class AuthentikApiClient:
         auth_flow = None
         inval_flow = None
 
-        # Try to resolve authorization flow directly by slug (Comment 2 pagination optimization)
+        # Try to resolve authorization flow directly by slug
         try:
             res = self._request(
                 "/api/v3/flows/instances/default-provider-authorization-implicit-consent/"
@@ -149,7 +189,7 @@ class AuthentikApiClient:
             if e.status_code != 404:
                 raise e
 
-        # Try to resolve invalidation flow directly by slug (Comment 2 pagination optimization)
+        # Try to resolve invalidation flow directly by slug
         try:
             res = self._request("/api/v3/flows/instances/default-provider-invalidation-flow/")
             inval_flow = res.get("pk")
@@ -178,10 +218,47 @@ class AuthentikApiClient:
 
         if not auth_flow or not inval_flow:
             raise AuthentikApiError(
-                "Could not resolve default authorization or invalidation flows"
+                "Could not resolve default authorization or invalidation flows",
+                status_code=404,
             )
 
         return auth_flow, inval_flow
+
+    def resolve_flow_ids(self) -> Tuple[str, str]:
+        """Dynamically find default authorization and invalidation flow UUIDs with retry.
+
+        Returns:
+            A tuple of (authorization_flow_uuid, invalidation_flow_uuid).
+
+        Raises:
+            AuthentikApiError: If standard flows cannot be found after retries.
+        """
+
+        def _should_retry(exception: Exception) -> bool:
+            """Determine if we should retry flow resolution."""
+            return isinstance(exception, AuthentikApiError) and exception.status_code == 404
+
+        def _before_sleep(retry_state: Any) -> None:
+            """Log a warning before sleeping between retries."""
+            logger.warning(
+                "Default Authentik flows not ready yet (attempt %d); retrying...",
+                retry_state.attempt_number,
+            )
+
+        try:
+            for attempt in tenacity.Retrying(
+                stop=tenacity.stop_after_delay(120),
+                wait=tenacity.wait_exponential(multiplier=1, min=5, max=15),
+                retry=tenacity.retry_if_exception(_should_retry),
+                before_sleep=_before_sleep,
+                reraise=True,
+            ):
+                with attempt:
+                    return self._resolve_flow_ids_once()
+        except tenacity.RetryError as e:
+            raise AuthentikApiError(
+                "Could not resolve default authorization or invalidation flows after retries"
+            ) from e
 
     def _find_stage(self, stages: List[Any], name: str) -> Optional[str]:
         """Find a stage UUID by its name."""
@@ -269,7 +346,7 @@ class AuthentikApiClient:
         Returns:
             The integer primary key (ID) of the Provider.
         """
-        providers = self._request_all("/api/v3/providers/ldap/")
+        providers = self._request_all(f"/api/v3/providers/ldap/?search={quote(name)}")
         provider_pk = None
 
         for prov in providers:
@@ -334,6 +411,35 @@ class AuthentikApiClient:
         logger.info("Updating LDAP Provider '%s' configuration.", provider_pk)
         self._request(f"/api/v3/providers/ldap/{provider_pk}/", method="PATCH", data=provider_data)
 
+    def get_or_create_application(self, name: str, slug: str, provider_pk: int) -> None:
+        """Find or create an Application and bind the LDAP Provider to it.
+
+        Args:
+            name: The unique name of the Application.
+            slug: The slug identifier of the Application.
+            provider_pk: The ID of the bound LDAP Provider.
+        """
+        apps = self._request_all(f"/api/v3/core/applications/?search={quote(slug)}")
+        app_pk = None
+
+        for app in apps:
+            if app.get("slug") == slug or app.get("name") == name:
+                app_pk = app.get("pk")
+                break
+
+        app_data = {
+            "name": name,
+            "slug": slug,
+            "provider": provider_pk,
+        }
+
+        if app_pk:
+            logger.info("Found existing Application '%s'. Syncing config.", name)
+            self._request(f"/api/v3/core/applications/{slug}/", method="PATCH", data=app_data)
+        else:
+            logger.info("Application '%s' not found. Creating a new one.", name)
+            self._request("/api/v3/core/applications/", method="POST", data=app_data)
+
     def get_or_create_outpost(self, name: str, provider_pk: int) -> Tuple[str, str]:
         """Find or create an LDAP Outpost, ensuring the provider is bound.
 
@@ -344,7 +450,7 @@ class AuthentikApiClient:
         Returns:
             A tuple of (outpost_uuid, token_identifier).
         """
-        outposts = self._request_all("/api/v3/outposts/instances/")
+        outposts = self._request_all(f"/api/v3/outposts/instances/?search={quote(name)}")
         outpost_pk = None
         token_identifier = None
         existing_providers: List[int] = []
@@ -413,7 +519,7 @@ class AuthentikApiClient:
             The UUID PK of the group if found, otherwise None.
         """
         # Encode name parameter
-        encoded_name = urllib.parse.quote(name)
+        encoded_name = quote(name)
         res = self._request(f"/api/v3/core/groups/?name={encoded_name}")
         results = res.get("results", [])
         if results:
@@ -430,7 +536,7 @@ class AuthentikApiClient:
             A tuple of (user_pk, username).
         """
         # First check if the service account user already exists
-        encoded_name = urllib.parse.quote(name)
+        encoded_name = quote(name)
         existing = self._request(f"/api/v3/core/users/?name={encoded_name}")
         results = existing.get("results", [])
         for user in results:
