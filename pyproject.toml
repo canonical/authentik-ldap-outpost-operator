@@ -1,4 +1,4 @@
-# Copyright 2022 Canonical Ltd.
+# Copyright 2026 Canonical Ltd.
 # See LICENSE file for licensing details.
 
 [build-system]
@@ -29,9 +29,11 @@ unit = [
     "pytest-mock",
     "coverage[toml]",
     "jsonschema",
+    "responses",
 ]
 integration = [
     "jubilant",
+    "pytest-jubilant>=2,<3",
     "pytest",
     "requests",
     "tenacity",
@@ -127,7 +129,7 @@ convention = "google"
 pretty = true
 plugins = ["pydantic.mypy"]
 mypy_path = "./src:./lib/:./tests"
-exclude = 'lib/charms/((?!authentik_ldap_outpost_service/).)'
+exclude = 'lib/charms/((?!authentik_ldap_outpost/).)'
 follow_imports = "silent"
 warn_redundant_casts = true
 warn_unused_configs = true
@@ -147,4 +149,3 @@ module = ["ops.*", "pytest.*", "jubilant.*", "urllib3.*", "jinja2.*", "lightkube
 
 [tool.pyright]
 extraPaths = ["src", "lib"]
-

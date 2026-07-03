@@ -1,0 +1,10 @@
+groups:
+  - name: authentik-ldap
+    rules:
+      - alert: AuthentikLdapUnavailable
+        expr: up == 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: Authentik LDAP outpost is unavailable

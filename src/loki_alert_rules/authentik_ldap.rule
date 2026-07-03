@@ -1,0 +1,10 @@
+groups:
+  - name: authentik-ldap-logs
+    rules:
+      - alert: AuthentikLdapErrorLogged
+        expr: rate({app="authentik-ldap"} |= "error"[5m]) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: Authentik LDAP outpost has logged errors

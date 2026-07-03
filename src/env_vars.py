@@ -4,13 +4,17 @@
 """Environment variable helpers and protocol."""
 
 import logging
-from typing import Protocol, runtime_checkable
+from typing import Mapping, Protocol, TypeAlias, Union, runtime_checkable
 
 logger = logging.getLogger(__name__)
 
+EnvVars: TypeAlias = Mapping[str, Union[str, bool]]
 
-DEFAULT_CONTAINER_ENV: dict[str, str] = {
+DEFAULT_CONTAINER_ENV: EnvVars = {
+    "AUTHENTIK_HOST": "",
+    "AUTHENTIK_TOKEN": "",
     "AUTHENTIK_INSECURE": "true",
+    "AUTHENTIK_LOG_LEVEL": "info",
 }
 
 
@@ -18,28 +22,6 @@ DEFAULT_CONTAINER_ENV: dict[str, str] = {
 class EnvVarConvertible(Protocol):
     """Protocol for objects that can provide environment variables."""
 
-    def to_env_vars(self) -> dict[str, str]:
+    def to_env_vars(self) -> EnvVars:
         """Convert to environment variable dict."""
         ...
-
-
-class EnvVarMerger:
-    """Merge multiple EnvVarConvertible sources into a single env dict.
-
-    Precedence: later sources override earlier ones.
-    """
-
-    def __init__(self, *sources: EnvVarConvertible):
-        self._sources = sources
-
-    def to_env_vars(self) -> dict[str, str]:
-        """Merge all source environment variables.
-
-        Returns:
-            Merged environment variable dict.
-        """
-        env: dict[str, str] = dict(DEFAULT_CONTAINER_ENV)
-        for source in self._sources:
-            if isinstance(source, EnvVarConvertible):
-                env.update(source.to_env_vars())
-        return env

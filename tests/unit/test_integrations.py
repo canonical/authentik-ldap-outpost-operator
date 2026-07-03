@@ -1,150 +1,93 @@
 # Copyright 2026 Canonical Ltd.
 # See LICENSE file for licensing details.
 
-import pytest
-from charm import AuthentikLdapCharm
-from constants import (
-    LDAP_RELATION,
-    WORKLOAD_CONTAINER,
+"""Unit tests for relation integrations."""
+
+from typing import Any
+from unittest.mock import MagicMock, create_autospec
+
+from charms.authentik_server.v0.authentik_server_info import (
+    AuthentikServerInfoRequirer,
 )
-from integrations import (
-    IngressIntegration,
-    Integrations,
-    LdapProviderIntegration,
-    ServerInfoIntegration,
-)
-from ops import testing
+
+from integrations import ServerInfoIntegration, TracingData
 
 
 class TestServerInfoIntegration:
-    """Tests for ServerInfoIntegration."""
+    """Tests for the ServerInfoIntegration wrapper."""
 
-    def test_is_ready_returns_false_without_relation(self):
-        """Test is_ready returns False when no relation exists."""
-        ctx = testing.Context(AuthentikLdapCharm)
-        container = testing.Container(WORKLOAD_CONTAINER, can_connect=True)
-        state = testing.State(containers={container})
-        ctx.run(ctx.on.pebble_ready(container), state)
+    def test_to_env_vars_returns_env_when_ready(self, mocker: Any) -> None:
+        """Test that to_env_vars returns expected environment variables when ready."""
+        mock_charm = mocker.MagicMock()
+        mock_requirer = create_autospec(AuthentikServerInfoRequirer)
+        mocker.patch("integrations.AuthentikServerInfoRequirer", return_value=mock_requirer)
 
-        harness = testing.Harness(AuthentikLdapCharm)
-        harness.begin()
-        charm = harness.charm
+        integration = ServerInfoIntegration(mock_charm)
+        mock_requirer.is_ready.return_value = True
+        mock_requirer.get_authentik_host.return_value = "http://authentik:9000"
+        mock_requirer.get_authentik_token.return_value = "token123"
+        mock_requirer.get_bootstrap_password.return_value = "password123"
 
-        integration = ServerInfoIntegration(charm)
-        assert not integration.is_ready()
+        env = integration.to_env_vars()
+        assert env["AUTHENTIK_HOST"] == "http://authentik:9000"
+        assert env["AUTHENTIK_TOKEN"] == "token123"
 
-    def test_build_env_returns_empty_when_not_ready(self):
-        """Test build_env returns empty dict when relation not ready."""
-        harness = testing.Harness(AuthentikLdapCharm)
-        harness.begin()
-        charm = harness.charm
+    def test_to_env_vars_empty_when_not_ready(self, mocker: Any) -> None:
+        """Test that to_env_vars returns empty dict when requirer is not ready."""
+        mock_charm = mocker.MagicMock()
+        mock_requirer = create_autospec(AuthentikServerInfoRequirer)
+        mocker.patch("integrations.AuthentikServerInfoRequirer", return_value=mock_requirer)
 
-        integration = ServerInfoIntegration(charm)
-        env = integration.build_env()
+        integration = ServerInfoIntegration(mock_charm)
+        mock_requirer.is_ready.return_value = False
 
-        assert env == {}
+        assert integration.to_env_vars() == {}
 
-    def test_get_host_returns_none_without_relation(self):
-        """Test get_host returns None when no relation."""
-        harness = testing.Harness(AuthentikLdapCharm)
-        harness.begin()
-        charm = harness.charm
+    def test_is_ready_delegates_to_requirer(self, mocker: Any) -> None:
+        """Test that is_ready delegates directly to the underlying requirer."""
+        mock_charm = mocker.MagicMock()
+        mock_requirer = create_autospec(AuthentikServerInfoRequirer)
+        mocker.patch("integrations.AuthentikServerInfoRequirer", return_value=mock_requirer)
 
-        integration = ServerInfoIntegration(charm)
-        assert integration.get_host() is None
+        integration = ServerInfoIntegration(mock_charm)
 
-    def test_get_token_returns_none_without_relation(self):
-        """Test get_token returns None when no relation."""
-        harness = testing.Harness(AuthentikLdapCharm)
-        harness.begin()
-        charm = harness.charm
+        mock_requirer.is_ready.return_value = True
+        assert integration.is_ready() is True
 
-        integration = ServerInfoIntegration(charm)
-        assert integration.get_token() is None
-
-    def test_get_bootstrap_password_returns_none_without_relation(self):
-        """Test get_bootstrap_password returns None when no relation."""
-        harness = testing.Harness(AuthentikLdapCharm)
-        harness.begin()
-        charm = harness.charm
-
-        integration = ServerInfoIntegration(charm)
-        assert integration.get_bootstrap_password() is None
-
-    def test_events_property_returns_none(self):
-        """Test events property returns None when lib not available."""
-        harness = testing.Harness(AuthentikLdapCharm)
-        harness.begin()
-        charm = harness.charm
-
-        integration = ServerInfoIntegration(charm)
-        assert integration.events is None
+        mock_requirer.is_ready.return_value = False
+        assert integration.is_ready() is False
 
 
-class TestLdapProviderIntegration:
-    """Tests for LdapProviderIntegration."""
+class TestTracingData:
+    """Tests for the TracingData class."""
 
-    def test_provider_property_returns_none_when_lib_not_available(self):
-        """Test provider returns None when glauth lib not available."""
-        harness = testing.Harness(AuthentikLdapCharm)
-        harness.begin()
-        charm = harness.charm
+    def test_load_returns_empty_when_not_ready(self) -> None:
+        """Test load returns empty TracingData when requirer is not ready."""
+        mock_requirer = MagicMock()
+        mock_requirer.is_ready.return_value = False
 
-        integration = LdapProviderIntegration(charm)
-        assert integration.provider is None
+        data = TracingData.load(mock_requirer)
+        assert not data.is_ready
+        assert data.http_endpoint == ""
+        assert data.to_env_vars() == {}
 
-    def test_update_data_does_nothing_without_provider(self):
-        """Test update_data does nothing when provider lib not available."""
-        harness = testing.Harness(AuthentikLdapCharm)
-        harness.begin()
-        charm = harness.charm
+    def test_load_returns_endpoint_when_ready(self) -> None:
+        """Test load returns TracingData with endpoint when requirer is ready."""
+        mock_requirer = MagicMock()
+        mock_requirer.is_ready.return_value = True
+        mock_requirer.get_endpoint.return_value = "http://tempo:4318"
 
-        integration = LdapProviderIntegration(charm)
-        integration.update_data("127.0.0.1", "password123")
+        data = TracingData.load(mock_requirer)
+        assert data.is_ready
+        assert data.http_endpoint == "http://tempo:4318"
 
+    def test_to_env_vars_returns_otlp_endpoint_when_ready(self) -> None:
+        """Test to_env_vars returns correct environment variables when ready."""
+        data = TracingData(is_ready=True, http_endpoint="http://tempo:4318")
+        env = data.to_env_vars()
+        assert env == {"AUTHENTIK_OUTPOST__DISCOVER__OTLP_TRACES_ENDPOINT": "http://tempo:4318"}
 
-class TestIngressIntegration:
-    """Tests for IngressIntegration."""
-
-    def test_ldap_events_property_returns_none(self):
-        """Test ldap_events returns None when traefik lib not available."""
-        harness = testing.Harness(AuthentikLdapCharm)
-        harness.begin()
-        charm = harness.charm
-
-        integration = IngressIntegration(charm)
-        assert integration.ldap_events is None
-
-    def test_ldaps_events_property_returns_none(self):
-        """Test ldaps_events returns None when traefik lib not available."""
-        harness = testing.Harness(AuthentikLdapCharm)
-        harness.begin()
-        charm = harness.charm
-
-        integration = IngressIntegration(charm)
-        assert integration.ldaps_events is None
-
-
-class TestIntegrations:
-    """Tests for Integrations container."""
-
-    def test_integrations_contain_all_integrations(self):
-        """Test Integrations container has all integration objects."""
-        harness = testing.Harness(AuthentikLdapCharm)
-        harness.begin()
-        charm = harness.charm
-
-        integrations = Integrations(charm)
-
-        assert isinstance(integrations.server_info, ServerInfoIntegration)
-        assert isinstance(integrations.ldap_provider, LdapProviderIntegration)
-        assert isinstance(integrations.ingress, IngressIntegration)
-
-    def test_get_unit_address_raises_without_relation(self):
-        """Test get_unit_address raises when relation doesn't exist."""
-        harness = testing.Harness(AuthentikLdapCharm)
-        harness.begin()
-        charm = harness.charm
-
-        with pytest.raises(Exception):
-            Integrations.get_unit_address(charm.model, LDAP_RELATION)
+    def test_to_env_vars_empty_when_not_ready(self) -> None:
+        """Test to_env_vars returns empty dict when no endpoint is set."""
+        data = TracingData(is_ready=False, http_endpoint="http://tempo:4318")
+        assert data.to_env_vars() == {}

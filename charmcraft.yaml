@@ -54,6 +54,28 @@ config:
         automatically deduced from it).
         See https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
       type: string
+    base_dn:
+      description: Base DN under which LDAP objects are accessible.
+      type: string
+      default: "dc=ldap,dc=goauthentik,dc=io"
+    search_group:
+      description: The name of the group whose members can search the directory.
+      type: string
+      default: "authentik Admingroup"
+    search_mode:
+      description: "LDAP search mode: direct or cached."
+      type: string
+      default: "direct"
+    bind_mode:
+      description: "LDAP bind mode: direct or cached."
+      type: string
+      default: "direct"
+    mfa_support:
+      description: Enable/disable multi-factor authentication support via password-appending.
+      type: boolean
+      default: false
+
+
 
 actions:
 
@@ -67,10 +89,17 @@ requires:
     optional: true
     description: |
       Provides traces to COS Tempo instance
-  pg-database:
-    interface: postgresql_client
-    optional: false
+  authentik-server-info:
+    interface: authentik_server_info
+    optional: true
+  ingress:
+    interface: ingress
     limit: 1
+    optional: true
+  ldaps-ingress:
+    interface: ingress
+    limit: 1
+    optional: true
 
 provides:
   metrics-endpoint:
@@ -83,9 +112,15 @@ provides:
     optional: true
     description: |
       Forwards the built-in grafana dashboard(s) for monitoring authentik-ldap-outpost.
+  ldap:
+    interface: ldap
+
+peers:
+  authentik-ldap-peers:
+    interface: authentik_ldap_peers
 
 containers:
-  authentik-ldap-outpost:
+  authentik-ldap:
     gid: 584792
     uid: 584792
     resource: oci-image
@@ -94,7 +129,7 @@ resources:
   oci-image:
     type: oci-image
     description: OCI image for authentik-ldap-outpost
-    upstream-source: ghcr.io/canonical/authentik-ldap-outpost:v0.2.0
+    upstream-source: ghcr.io/canonical/authentik-ldap-outpost:2026.5.3
 
 parts:
   charm:
