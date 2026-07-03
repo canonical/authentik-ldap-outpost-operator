@@ -107,6 +107,7 @@ dev = [
     { name = "pytest-jubilant" },
     { name = "pytest-mock" },
     { name = "requests" },
+    { name = "responses" },
     { name = "ruff" },
     { name = "tenacity" },
     { name = "tomli" },
@@ -136,13 +137,14 @@ unit = [
     { name = "ops", extra = ["testing"] },
     { name = "pytest" },
     { name = "pytest-mock" },
+    { name = "responses" },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "authentik-ldap-outpost-operator", extras = ["fmt", "lint", "unit", "integration"], marker = "extra == 'dev'" },
     { name = "codespell", marker = "extra == 'lint'" },
-    { name = "cosl", specifier = "~=1.3.0" },
+    { name = "cosl", specifier = "~=1.9.2" },
     { name = "coverage", extras = ["toml"], marker = "extra == 'unit'" },
     { name = "isort", marker = "extra == 'fmt'" },
     { name = "isort", marker = "extra == 'lint'" },
@@ -162,6 +164,7 @@ requires-dist = [
     { name = "pytest-mock", marker = "extra == 'unit'" },
     { name = "requests", specifier = "~=2.32.0" },
     { name = "requests", marker = "extra == 'integration'" },
+    { name = "responses", marker = "extra == 'unit'" },
     { name = "ruff", marker = "extra == 'fmt'" },
     { name = "ruff", marker = "extra == 'lint'" },
     { name = "tenacity", marker = "extra == 'integration'" },
@@ -314,7 +317,7 @@ wheels = [
 
 [[package]]
 name = "cosl"
-version = "1.3.2"
+version = "1.9.2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "ops" },
@@ -323,9 +326,9 @@ dependencies = [
     { name = "tenacity" },
     { name = "typing-extensions" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/e6/b3/bd83f017c73044a221bc0c7ad62f583d11d1276190f65eb1c086150e24e4/cosl-1.3.2.tar.gz", hash = "sha256:dea8e937629b44232bb306f76fbf88064a1a0093fe66dacdd43ab2cb06b7f35f", size = 46029, upload-time = "2025-11-20T22:03:14.031Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/00/3e/2f8fe3f460b18cea99722f3cdb885d494de1cc9accef1cd18535c14de3f1/cosl-1.9.2.tar.gz", hash = "sha256:4999be5574c679f8070806f125b2c50fc4bdaa78e8f8247b17868af20e82bcfd", size = 150799, upload-time = "2026-06-16T15:00:42.378Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/b2/e2/d10330cce5be3d8842d3a8889ed368546a2fa41b701c1abb56b0bf9b59f2/cosl-1.3.2-py3-none-any.whl", hash = "sha256:52ca0983fb0bf3bfa8d0bb796fc6a8208a71bbf4481a5c90905b1f71a1184d4b", size = 36598, upload-time = "2025-11-20T22:03:12.736Z" },
+    { url = "https://files.pythonhosted.org/packages/66/be/93e0b9eb3de24b5fd670e1de2dac2ab9bdb6e2fcd659a806830aa07bc6ca/cosl-1.9.2-py3-none-any.whl", hash = "sha256:b78248720fc250fb8f3b872c2e0eae760129d80ac76829a556ecc963fe793b81", size = 38346, upload-time = "2026-06-16T15:00:41.215Z" },
 ]
 
 [[package]]
@@ -445,7 +448,7 @@ name = "exceptiongroup"
 version = "1.3.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "typing-extensions", marker = "python_full_version < '3.11'" },
+    { name = "typing-extensions" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/50/79/66800aadf48771f6b62f7eb014e352e5d06856655206165d775e675a02c9/exceptiongroup-1.3.1.tar.gz", hash = "sha256:8b412432c6055b0b7d14c310000ae93352ed6754f70fa8f7c34141f91c4e3219", size = 30371, upload-time = "2025-11-21T23:01:54.787Z" }
 wheels = [
@@ -1293,6 +1296,20 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/c9/74/b3ff8e6c8446842c3f5c837e9c3dfcfe2018ea6ecef224c710c85ef728f4/requests-2.32.5.tar.gz", hash = "sha256:dbba0bac56e100853db0ea71b82b4dfd5fe2bf6d3754a8893c3af500cec7d7cf", size = 134517, upload-time = "2025-08-18T20:46:02.573Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/1e/db/4254e3eabe8020b458f1a747140d32277ec7a271daf1d235b70dc0b4e6e3/requests-2.32.5-py3-none-any.whl", hash = "sha256:2462f94637a34fd532264295e186976db0f5d453d1cdd31473c85a6a161affb6", size = 64738, upload-time = "2025-08-18T20:46:00.542Z" },
+]
+
+[[package]]
+name = "responses"
+version = "0.26.2"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "pyyaml" },
+    { name = "requests" },
+    { name = "urllib3" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/f0/1a/4af3e6d659394b809838490b144e4ab8d7ed3b9fecc7ca78f5d2f79b1a3d/responses-0.26.2.tar.gz", hash = "sha256:9c9259b46a8349197edebf43cfa68a87e1a2802ef503ff8b2fecbabc0b45afd8", size = 84030, upload-time = "2026-07-03T16:44:50.325Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/7c/28/693e1d9ebf72baa062ded80d837a035b86ce75eda5a269379e9e2b1008a8/responses-0.26.2-py3-none-any.whl", hash = "sha256:6fdfeabd58e5ec473b98dfe02e6d46d3173bd8dd573eff2ccccf1a05a5135364", size = 35609, upload-time = "2026-07-03T16:44:49.1Z" },
 ]
 
 [[package]]
