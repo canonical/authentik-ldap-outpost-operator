@@ -15,6 +15,7 @@ DEFAULT_CONTAINER_ENV: EnvVars = {
     "AUTHENTIK_TOKEN": "",
     "AUTHENTIK_INSECURE": "true",
     "AUTHENTIK_LOG_LEVEL": "info",
+    "GOFIPS": "1",
 }
 
 
