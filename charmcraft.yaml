@@ -75,6 +75,13 @@ config:
       description: Enable/disable multi-factor authentication support via password-appending.
       type: boolean
       default: false
+    ingress_domain:
+      description: |
+        The custom domain name to use for the external ingress route (e.g. "outpost.example.com").
+        If unset, the route rule defaults to "HostSNI(`*`)" to match all incoming TLS traffic on port 636.
+      type: string
+      default: ""
+
 
 
 
@@ -93,12 +100,8 @@ requires:
   authentik-server-info:
     interface: authentik_server_info
     optional: true
-  ingress:
-    interface: ingress
-    limit: 1
-    optional: true
-  ldaps-ingress:
-    interface: ingress
+  traefik-route:
+    interface: traefik_route
     limit: 1
     optional: true
 

@@ -30,3 +30,12 @@ class CharmConfig:
             "HTTPS_PROXY": self._config.get("https_proxy", ""),
             "NO_PROXY": self._config.get("no_proxy", ""),
         }
+
+    @property
+    def ingress_domain(self) -> str:
+        """The custom domain name to use for the external ingress route.
+
+        Returns:
+            The configured ingress domain, or empty string if not configured.
+        """
+        return self._config.get("ingress_domain", "")

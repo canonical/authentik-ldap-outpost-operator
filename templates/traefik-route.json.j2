@@ -1,0 +1,21 @@
+{
+  "tcp": {
+    "routers": {
+      "juju-{{ identifier }}-tcp-router": {
+        "entryPoints": ["ldaps"],
+        "rule": "{{ rule }}",
+        "service": "juju-{{ identifier }}-tcp-service",
+        "tls": {
+          "passthrough": false
+        }
+      }
+    },
+    "services": {
+      "juju-{{ identifier }}-tcp-service": {
+        "loadBalancer": {
+          "servers": [{ "address": "{{ app }}.{{ model }}.svc.cluster.local:{{ ldap_port }}" }]
+        }
+      }
+    }
+  }
+}

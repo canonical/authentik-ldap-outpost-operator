@@ -3,25 +3,31 @@
 
 """Integration helpers for charm relations."""
 
+import json
 import logging
 from dataclasses import dataclass
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
+
+if TYPE_CHECKING:
+    from charm import AuthentikLdapCharm
+
 
 from charms.authentik_server.v0.authentik_server_info import (
     AuthentikServerInfoRequirer,
 )
 from charms.glauth_k8s.v0.ldap import LdapProvider, LdapProviderData
 from charms.tempo_coordinator_k8s.v0.tracing import TracingEndpointRequirer
-from charms.traefik_k8s.v2.ingress import IngressPerAppRequirer
+from charms.traefik_k8s.v0.traefik_route import TraefikRouteRequirer
+from jinja2 import Template
 from ops.charm import CharmBase
 
 from constants import (
     AUTHENTIK_INSECURE,
-    INGRESS_RELATION,
     LDAP_PORT,
-    LDAPS_INGRESS_RELATION,
+    LDAP_RELATION,
     LDAPS_PORT,
     SERVER_INFO_RELATION,
+    TRAEFIK_ROUTE_RELATION,
 )
 from env_vars import EnvVarConvertible, EnvVars
 
@@ -35,14 +41,6 @@ class ServerInfo:
     host: str
     bootstrap_token: str
     bootstrap_password: str
-
-
-class IngressPerUnitRequirer(IngressPerAppRequirer):
-    """Shim for IngressPerUnitRequirer using IngressPerAppRequirer."""
-
-    def __init__(self, *args, **kwargs):
-        kwargs.pop("mode", None)
-        super().__init__(*args, **kwargs)
 
 
 class ServerInfoIntegration(EnvVarConvertible):
@@ -103,6 +101,8 @@ class LdapProviderIntegration:
         base_dn: str,
         bind_dn: str,
         password: str,
+        ldaps_enabled: bool = False,
+        external_host: Optional[str] = None,
     ) -> None:
         """Update specific LDAP relation data for a consumer.
 
@@ -112,10 +112,17 @@ class LdapProviderIntegration:
             base_dn: The Base DN of the directory.
             bind_dn: The Bind DN for the service account.
             password: The password for the service account.
+            ldaps_enabled: Whether secure LDAPS is enabled.
+            external_host: Optional external host from Traefik.
         """
+        ldaps_urls = (
+            [f"ldaps://{external_host}:{LDAPS_PORT}"]
+            if ldaps_enabled and external_host
+            else [f"ldaps://{unit_address}:{LDAPS_PORT}"]
+        )
         data = LdapProviderData(
             urls=[f"ldap://{unit_address}:{LDAP_PORT}"],
-            ldaps_urls=[f"ldaps://{unit_address}:{LDAPS_PORT}"],
+            ldaps_urls=ldaps_urls,
             base_dn=base_dn,
             starttls=False,
             bind_dn=bind_dn,
@@ -124,28 +131,78 @@ class LdapProviderIntegration:
         )
         self._provider.update_relations_app_data(data, relation_id=relation_id)
 
+        # Write ldaps_enabled=true/false directly to the app databag
+        relation = self._charm.model.get_relation(LDAP_RELATION, relation_id)
+        if relation and self._charm.unit.is_leader():
+            relation.data[self._charm.app]["ldaps_enabled"] = str(ldaps_enabled).lower()
 
-class IngressIntegration:
-    """Integration with Traefik for ingress."""
 
-    def __init__(self, charm: CharmBase):
+class TraefikRouteIntegration:
+    """Integration with Traefik for L4 route configuration."""
+
+    def __init__(self, charm: "AuthentikLdapCharm"):
         self._charm = charm
-        self._ldap_ingress = IngressPerUnitRequirer(
-            charm, relation_name=INGRESS_RELATION, port=LDAP_PORT, mode="tcp"
-        )
-        self._ldaps_ingress = IngressPerUnitRequirer(
-            charm, relation_name=LDAPS_INGRESS_RELATION, port=LDAPS_PORT, mode="tcp"
+        self._requirer = TraefikRouteRequirer(
+            charm,
+            charm.model.get_relation(TRAEFIK_ROUTE_RELATION),
+            relation_name=TRAEFIK_ROUTE_RELATION,
         )
 
     @property
-    def ldap_requirer(self) -> IngressPerUnitRequirer:
-        """The LDAP ingress requirer."""
-        return self._ldap_ingress
+    def requirer(self) -> TraefikRouteRequirer:
+        """The TraefikRouteRequirer instance."""
+        return self._requirer
 
     @property
-    def ldaps_requirer(self) -> IngressPerUnitRequirer:
-        """The LDAPS ingress requirer."""
-        return self._ldaps_ingress
+    def ldaps_enabled(self) -> bool:
+        """Check if Traefik route has LDAPS enabled by inspecting the scheme.
+
+        The assumption is that if Traefik reports its scheme as "https", it possesses
+        a valid TLS certificate. This implies Traefik can also perform TLS termination
+        for TCP traffic (LDAPS) using that same certificate.
+        """
+        return self._requirer.scheme == "https"
+
+    def is_ready(self) -> bool:
+        """Check if Traefik route is ready with a valid external host."""
+        return bool(self._requirer.is_ready() and self._requirer.external_host)
+
+    @property
+    def external_host(self) -> str:
+        """The external host from Traefik."""
+        return self._requirer.external_host
+
+    def submit_route(self) -> None:
+        """Render and submit static and dynamic route configuration to Traefik."""
+        relation = self._charm.model.get_relation(TRAEFIK_ROUTE_RELATION)
+        if not relation or not self._charm.unit.is_leader():
+            return
+
+        # Renders templates/traefik-route.json.j2
+        with open("templates/traefik-route.json.j2", "r") as f:
+            template_content = f.read()
+
+        model_name = self._charm.model.name
+        app_name = self._charm.app.name
+        identifier = f"{model_name}-{app_name}"
+
+        template = Template(template_content)
+        ingress_domain = self._charm._config.ingress_domain
+        rule = f"HostSNI(`{ingress_domain}`)" if ingress_domain else "HostSNI(`*`)"
+
+        rendered_json = template.render(
+            identifier=identifier,
+            app=app_name,
+            model=model_name,
+            rule=rule,
+            ldap_port=LDAP_PORT,
+        )
+
+        dynamic_config = json.loads(rendered_json)
+
+        static_config = {"entryPoints": {"ldaps": {"address": f":{LDAPS_PORT}"}}}
+
+        self._requirer.submit_to_traefik(config=dynamic_config, static=static_config)
 
 
 @dataclass(frozen=True)

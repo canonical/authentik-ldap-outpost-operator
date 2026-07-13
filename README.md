@@ -51,6 +51,8 @@ The following configurations can be declared to govern the global characteristic
 | `search_mode` | string | `direct` | Access mode for searches: `direct` (live server queries) or `cached` (in-memory caching). |
 | `bind_mode` | string | `direct` | Access mode for binds: `direct` or `cached`. |
 | `mfa_support` | boolean | `false` | Enable/disable multi-factor authentication support via password-appending. |
+| `ingress_domain` | string | `""` | The custom domain name to use for the external ingress route (e.g., `outpost.example.com`). If unset, the route rule defaults to `HostSNI(*)` to match all incoming TLS traffic on port 636. |
+
 
 ---
 
@@ -95,6 +97,29 @@ ldapsearch -x -H ldap://<outpost-ip>:3389 \
 ```
 
 A successful setup will output `result: 0 Success` along with your mapped directory objects.
+
+### 3. Secure Multi-Outpost SNI Routing
+
+When deploying multiple independent outposts that share the same Traefik Ingress controller, you must configure a distinct `ingress_domain` for each outpost to leverage SNI multiplexing on port `636`. Without this, the catch-all `HostSNI(*)` rule creates routing conflicts.
+
+To deploy two outposts with SNI-based multiplexing:
+
+1. **Configure distinct ingress subdomains** for each outpost:
+   ```bash
+   juju config outpost-a ingress_domain="outpost-a.identity.example.com"
+   juju config outpost-b ingress_domain="outpost-b.identity.example.com"
+   ```
+
+2. **Relate both outposts to Traefik**:
+   ```bash
+   juju relate outpost-a:traefik-route traefik-k8s:traefik-route
+   juju relate outpost-b:traefik-route traefik-k8s:traefik-route
+   ```
+
+In this setup, Traefik's relation handlers automatically detect the custom domains and dynamically obtain distinct secure certificates for each subdomain from the related certificate provider (e.g. `self-signed-certificates` or `vault-k8s`).
+
+---
+
 
 ---
 

@@ -7,13 +7,12 @@ WORKLOAD_CONTAINER = "authentik-ldap"
 SERVICE_NAME = "authentik-ldap"
 COMMAND = "/ldap"
 LDAP_PORT = 3389
-LDAPS_PORT = 6636
+LDAPS_PORT = 636
 METRICS_PORT = 9300
 
 SERVER_INFO_RELATION = "authentik-server-info"
 LDAP_RELATION = "ldap"
-INGRESS_RELATION = "ingress"
-LDAPS_INGRESS_RELATION = "ldaps-ingress"
+TRAEFIK_ROUTE_RELATION = "traefik-route"
 PEER_RELATION = "authentik-ldap-peers"
 LOGGING_RELATION = "logging"
 METRICS_ENDPOINT_RELATION = "metrics-endpoint"
