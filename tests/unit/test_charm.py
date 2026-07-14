@@ -684,3 +684,112 @@ class TestProvisionAuthentikResources:
         assert "client_99_user_id" not in peer_rel_out.local_app_data
         assert "client_99_username" not in peer_rel_out.local_app_data
         assert "client_99_password" not in peer_rel_out.local_app_data
+
+
+class TestTraefikRouteRelation:
+    """Tests for the TraefikRoute relation integration."""
+
+    def test_traefik_route_ready_updates_ldap_relation_to_ldaps(
+        self,
+        context: testing.Context,
+        server_info_relation: testing.Relation,
+    ) -> None:
+        """Test that having traefik-route ready updates ldap relation data with LDAPS enabled."""
+        secret_token = testing.Secret(
+            {"bootstrap-token": "token123"},
+            id="secret:xyz",
+        )
+        secret_password = testing.Secret(
+            {"bootstrap-password": "password123"},
+            id="secret:abc",
+        )
+
+        ldap_relation = testing.Relation(
+            endpoint="ldap",
+            interface="ldap",
+            remote_app_name="nextcloud",
+        )
+
+        traefik_route_relation = testing.Relation(
+            endpoint="traefik-route",
+            interface="traefik_route",
+            remote_app_name="traefik",
+            remote_app_data={
+                "external_host": "external.address.dns",
+                "scheme": "https",
+            },
+        )
+
+        peer_relation = testing.PeerRelation(
+            endpoint="authentik-ldap-peers",
+            interface="authentik_ldap_peers",
+            local_app_data={
+                "outpost_token": "mock-token-123",
+                f"client_{ldap_relation.id}_user_id": "42",
+                f"client_{ldap_relation.id}_username": "ldap-client-relation-1",
+                f"client_{ldap_relation.id}_password": "strongpassword",
+            },
+        )
+
+        state_in = create_state(
+            can_connect=True,
+            relations=[server_info_relation, ldap_relation, peer_relation, traefik_route_relation],
+            secrets=[secret_token, secret_password],
+        )
+
+        # Trigger on.ready or relation_changed
+        state_out = context.run(context.on.relation_changed(traefik_route_relation), state_in)
+
+        # Assert consumer relation gets ldaps_enabled=true and ldaps_urls pointing to the external host
+        consumer_rel = state_out.get_relation(ldap_relation.id)
+        assert consumer_rel.local_app_data.get("ldaps_enabled") == "true"
+        import json
+
+        ldaps_urls = json.loads(consumer_rel.local_app_data.get("ldaps_urls", "[]"))
+        assert ldaps_urls == ["ldaps://external.address.dns:636"]
+
+    def test_traefik_route_broken_disables_ldaps(
+        self,
+        context: testing.Context,
+        server_info_relation: testing.Relation,
+    ) -> None:
+        """Test that breaking traefik-route updates ldap relation data with LDAPS disabled."""
+        secret_token = testing.Secret(
+            {"bootstrap-token": "token123"},
+            id="secret:xyz",
+        )
+        secret_password = testing.Secret(
+            {"bootstrap-password": "password123"},
+            id="secret:abc",
+        )
+
+        ldap_relation = testing.Relation(
+            endpoint="ldap",
+            interface="ldap",
+            remote_app_name="nextcloud",
+        )
+
+        peer_relation = testing.PeerRelation(
+            endpoint="authentik-ldap-peers",
+            interface="authentik_ldap_peers",
+            local_app_data={
+                "outpost_token": "mock-token-123",
+                f"client_{ldap_relation.id}_user_id": "42",
+                f"client_{ldap_relation.id}_username": "ldap-client-relation-1",
+                f"client_{ldap_relation.id}_password": "strongpassword",
+            },
+        )
+
+        state_in = create_state(
+            can_connect=True,
+            relations=[server_info_relation, ldap_relation, peer_relation],
+            secrets=[secret_token, secret_password],
+        )
+
+        # Let's say we started with it ready but now it's gone / broken
+        # Run standard holistic handler/config changed
+        state_out = context.run(context.on.config_changed(), state_in)
+
+        # Assert consumer relation gets ldaps_enabled=false
+        consumer_rel = state_out.get_relation(ldap_relation.id)
+        assert consumer_rel.local_app_data.get("ldaps_enabled") == "false"

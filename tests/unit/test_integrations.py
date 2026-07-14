@@ -10,7 +10,7 @@ from charms.authentik_server.v0.authentik_server_info import (
     AuthentikServerInfoRequirer,
 )
 
-from integrations import ServerInfoIntegration, TracingData
+from integrations import ServerInfoIntegration, TracingData, TraefikRouteIntegration
 
 
 class TestServerInfoIntegration:
@@ -91,3 +91,117 @@ class TestTracingData:
         """Test to_env_vars returns empty dict when no endpoint is set."""
         data = TracingData(is_ready=False, http_endpoint="http://tempo:4318")
         assert data.to_env_vars() == {}
+
+
+class TestTraefikRouteIntegration:
+    """Tests for the TraefikRouteIntegration wrapper."""
+
+    def test_is_ready_delegates_to_requirer(self, mocker: Any) -> None:
+        """Test is_ready checks requirer readiness and external host."""
+        mock_charm = mocker.MagicMock()
+        mock_requirer = MagicMock()
+        mocker.patch("integrations.TraefikRouteRequirer", return_value=mock_requirer)
+
+        integration = TraefikRouteIntegration(mock_charm)
+
+        mock_requirer.is_ready.return_value = True
+        mock_requirer.external_host = "external.host"
+        assert integration.is_ready() is True
+
+        mock_requirer.is_ready.return_value = False
+        assert integration.is_ready() is False
+
+        mock_requirer.is_ready.return_value = True
+        mock_requirer.external_host = ""
+        assert integration.is_ready() is False
+
+    def test_submit_route_submits_config_with_default_wildcard(self, mocker: Any) -> None:
+        """Test submit_route fallback to wildcard rule when ingress_domain is unset."""
+        mock_charm = mocker.MagicMock()
+        mock_charm.model.name = "my-model"
+        mock_charm.app.name = "my-app"
+        mock_charm.unit.is_leader.return_value = True
+        mock_charm._config.ingress_domain = ""
+
+        mock_requirer = MagicMock()
+        mocker.patch("integrations.TraefikRouteRequirer", return_value=mock_requirer)
+
+        # Mock open to return template content with {{ rule }} and {{ ldap_port }}
+        template_content = '{"tcp": {"routers": {"juju-{{ identifier }}-tcp-router": {"rule": "{{ rule }}"}}, "services": {"juju-{{ identifier }}-tcp-service": {"loadBalancer": {"servers": [{"address": "my-app.my-model.svc.cluster.local:{{ ldap_port }}"}]}}}}}'
+        mock_open = mocker.mock_open(read_data=template_content)
+        mocker.patch("builtins.open", mock_open)
+
+        integration = TraefikRouteIntegration(mock_charm)
+        integration.submit_route()
+
+        mock_requirer.submit_to_traefik.assert_called_once_with(
+            config={
+                "tcp": {
+                    "routers": {"juju-my-model-my-app-tcp-router": {"rule": "HostSNI(`*`)"}},
+                    "services": {
+                        "juju-my-model-my-app-tcp-service": {
+                            "loadBalancer": {
+                                "servers": [{"address": "my-app.my-model.svc.cluster.local:3389"}]
+                            }
+                        }
+                    },
+                }
+            },
+            static={"entryPoints": {"ldaps": {"address": ":636"}}},
+        )
+
+    def test_submit_route_submits_config_with_custom_domain(self, mocker: Any) -> None:
+        """Test submit_route renders specific HostSNI rule when ingress_domain is set."""
+        mock_charm = mocker.MagicMock()
+        mock_charm.model.name = "my-model"
+        mock_charm.app.name = "my-app"
+        mock_charm.unit.is_leader.return_value = True
+        mock_charm._config.ingress_domain = "outpost.example.com"
+
+        mock_requirer = MagicMock()
+        mocker.patch("integrations.TraefikRouteRequirer", return_value=mock_requirer)
+
+        # Mock open to return template content with {{ rule }} and {{ ldap_port }}
+        template_content = '{"tcp": {"routers": {"juju-{{ identifier }}-tcp-router": {"rule": "{{ rule }}"}}, "services": {"juju-{{ identifier }}-tcp-service": {"loadBalancer": {"servers": [{"address": "my-app.my-model.svc.cluster.local:{{ ldap_port }}"}]}}}}}'
+        mock_open = mocker.mock_open(read_data=template_content)
+        mocker.patch("builtins.open", mock_open)
+
+        integration = TraefikRouteIntegration(mock_charm)
+        integration.submit_route()
+
+        mock_requirer.submit_to_traefik.assert_called_once_with(
+            config={
+                "tcp": {
+                    "routers": {
+                        "juju-my-model-my-app-tcp-router": {
+                            "rule": "HostSNI(`outpost.example.com`)"
+                        }
+                    },
+                    "services": {
+                        "juju-my-model-my-app-tcp-service": {
+                            "loadBalancer": {
+                                "servers": [{"address": "my-app.my-model.svc.cluster.local:3389"}]
+                            }
+                        }
+                    },
+                }
+            },
+            static={"entryPoints": {"ldaps": {"address": ":636"}}},
+        )
+
+    def test_ldaps_enabled(self, mocker: Any) -> None:
+        """Test that ldaps_enabled checks the scheme on the requirer."""
+        mock_charm = mocker.MagicMock()
+        mock_requirer = MagicMock()
+        mocker.patch("integrations.TraefikRouteRequirer", return_value=mock_requirer)
+
+        integration = TraefikRouteIntegration(mock_charm)
+
+        mock_requirer.scheme = "https"
+        assert integration.ldaps_enabled is True
+
+        mock_requirer.scheme = "http"
+        assert integration.ldaps_enabled is False
+
+        mock_requirer.scheme = ""
+        assert integration.ldaps_enabled is False

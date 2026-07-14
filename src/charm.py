@@ -9,7 +9,6 @@ import logging
 import secrets
 from dataclasses import dataclass
 from typing import Optional
-from urllib.parse import urlparse
 
 import ops
 from charms.grafana_k8s.v0.grafana_dashboard import GrafanaDashboardProvider
@@ -39,10 +38,10 @@ from constants import (
 from env_vars import EnvVars
 from exceptions import PebbleError
 from integrations import (
-    IngressIntegration,
     LdapProviderIntegration,
     ServerInfoIntegration,
     TracingData,
+    TraefikRouteIntegration,
 )
 from services import PebbleService, WorkloadService
 from utils import NOOP_CONDITIONS
@@ -79,7 +78,7 @@ class AuthentikLdapCharm(ops.CharmBase):
 
         self.server_info = ServerInfoIntegration(self)
         self.ldap_provider = LdapProviderIntegration(self)
-        self.ingress = IngressIntegration(self)
+        self.traefik_route = TraefikRouteIntegration(self)
 
         self.metrics_endpoint = MetricsEndpointProvider(
             self,
@@ -110,8 +109,7 @@ class AuthentikLdapCharm(ops.CharmBase):
             self.on[LDAP_RELATION].relation_changed,
             self.server_info.on.info_changed,
             self.server_info.on.info_removed,
-            self.ingress.ldap_requirer.on.ready,
-            self.ingress.ldaps_requirer.on.ready,
+            self.traefik_route.requirer.on.ready,
             self.tracing_requirer.on.endpoint_changed,
             self.tracing_requirer.on.endpoint_removed,
         ]:
@@ -482,6 +480,16 @@ class AuthentikLdapCharm(ops.CharmBase):
         self.unit.status = ops.MaintenanceStatus("Configuring resources")
         self._holistic_handler(event)
 
+    def _ensure_traefik_route(self) -> bool:
+        """Ensure Traefik Route is submitted to Traefik if leader.
+
+        Returns:
+            bool: True.
+        """
+        if self.unit.is_leader():
+            self.traefik_route.submit_route()
+        return True
+
     def _holistic_handler(self, event: ops.EventBase) -> None:
         """Centralized reconciliation handler."""
         if not all(condition(self) for condition in NOOP_CONDITIONS):
@@ -489,6 +497,7 @@ class AuthentikLdapCharm(ops.CharmBase):
 
         can_plan = True
         for f in [
+            self._ensure_traefik_route,
             self._ensure_authentik_resources,
             self._ensure_ldap_provider,
         ]:
@@ -555,6 +564,13 @@ class AuthentikLdapCharm(ops.CharmBase):
 
         return bool(self._get_peer_data("outpost_token"))
 
+    @property
+    def _ldap_host(self) -> str:
+        """The hostname/IP address for LDAP and LDAPS clients to connect to."""
+        if self.traefik_route.ldaps_enabled and self.traefik_route.external_host:
+            return self.traefik_route.external_host
+        return f"{self.app.name}.{self.model.name}.svc.cluster.local"
+
     def _update_ldap_relation(self, relation: ops.Relation, address: str) -> bool:
         """Update a single LDAP relation's credentials and data.
 
@@ -586,12 +602,17 @@ class AuthentikLdapCharm(ops.CharmBase):
         base_dn = self.model.config.get("base_dn")
         bind_dn = f"cn={username},ou=users,{base_dn}"
 
+        ldaps_enabled = self.traefik_route.ldaps_enabled
+        external_host = self.traefik_route.external_host if ldaps_enabled else None
+
         self.ldap_provider.update_relation_data(
             relation_id=relation_id,
             unit_address=address,
             base_dn=base_dn,
             bind_dn=bind_dn,
             password=password,
+            ldaps_enabled=ldaps_enabled,
+            external_host=external_host,
         )
         return True
 
@@ -615,17 +636,9 @@ class AuthentikLdapCharm(ops.CharmBase):
         if not relations:
             return True
 
-        url = self.ingress.ldap_requirer.url
-        if url:
-            parsed = urlparse(url)
-            address = parsed.hostname or url
-        else:
-            address = str(self.model.get_binding(LDAP_RELATION).network.bind_address)
-
         success = True
         for relation in relations:
-            if not self._update_ldap_relation(relation, address):
-                success = False
+            success &= self._update_ldap_relation(relation, self._ldap_host)
 
         return success
 

@@ -17,8 +17,7 @@ output "requires" {
     logging               = "logging"
     tracing               = "tracing"
     authentik-server-info = "authentik-server-info"
-    ingress               = "ingress"
-    ldaps-ingress         = "ldaps-ingress"
+    traefik-route         = "traefik-route"
   }
 }
 
