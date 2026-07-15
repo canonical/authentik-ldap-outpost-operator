@@ -74,7 +74,7 @@ class AuthentikLdapCharm(ops.CharmBase):
         self._container = self.unit.get_container(WORKLOAD_CONTAINER)
         self._pebble = PebbleService(self.unit)
         self._workload_service = WorkloadService(self.unit)
-        self._config = CharmConfig(self.model.config)
+        self._config = CharmConfig(self, self.model.config)
 
         self.server_info = ServerInfoIntegration(self)
         self.ldap_provider = LdapProviderIntegration(self)
@@ -643,7 +643,7 @@ class AuthentikLdapCharm(ops.CharmBase):
         return success
 
     def _provision_service_account(self, relation_id: int) -> None:
-        """Provision an Authentik Service Account for a given relation ID."""
+        """Provision an Authentik User account for a given relation ID to act as LDAP Bind."""
         info = self.server_info.get_info()
         if not info:
             return
@@ -651,7 +651,7 @@ class AuthentikLdapCharm(ops.CharmBase):
         try:
             client = AuthentikApiClient(info.host, info.bootstrap_token)
             sa_name = f"ldap-client-{self.app.name}-{relation_id}"
-            user_pk, username = client.create_service_account(sa_name)
+            user_pk, username = client.create_ldap_bind_user(sa_name)
 
             password = secrets.token_urlsafe(16)
             client.set_user_password(user_pk, password)
@@ -674,7 +674,7 @@ class AuthentikLdapCharm(ops.CharmBase):
             })
             self._set_peer_data(f"client_{relation_id}", payload)
             logger.info(
-                "Successfully provisioned Service Account '%s' (ID %s) for relation %s",
+                "Successfully provisioned LDAP Bind User '%s' (ID %s) for relation %s",
                 username,
                 user_pk,
                 relation_id,
@@ -682,7 +682,7 @@ class AuthentikLdapCharm(ops.CharmBase):
             self._api_error = None
         except Exception as e:
             logger.error(
-                "Failed to provision Service Account for relation %s: %s",
+                "Failed to provision LDAP Bind User for relation %s: %s",
                 relation_id,
                 e,
             )

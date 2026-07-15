@@ -360,7 +360,7 @@ class AuthentikApiClient:
         provider_data = {
             "name": name,
             "authentication_flow": bind_flow,
-            "authorization_flow": auth_flow,
+            "authorization_flow": bind_flow,
             "invalidation_flow": inval_flow,
             "base_dn": base_dn,
             "search_mode": search_mode,
@@ -555,6 +555,38 @@ class AuthentikApiClient:
 
         if not user_pk or not username:
             raise AuthentikApiError(f"Failed to create service account {name}")
+
+        return user_pk, username
+
+    def create_ldap_bind_user(self, name: str) -> Tuple[int, str]:
+        """Create a standard user account to act as an LDAP Bind account.
+
+        Args:
+            name: Username and name of the LDAP bind user.
+
+        Returns:
+            A tuple of (user_pk, username).
+        """
+        encoded_name = quote(name)
+        existing = self._request(f"/api/v3/core/users/?name={encoded_name}")
+        results = existing.get("results", [])
+        for user in results:
+            if user.get("name") == name:
+                return user.get("pk"), user.get("username")
+
+        logger.info("Creating standard user for LDAP Bind: %s", name)
+        payload = {
+            "username": name,
+            "name": name,
+            "path": "users",
+            "is_active": True,
+        }
+        res = self._request("/api/v3/core/users/", method="POST", data=payload)
+        user_pk = res.get("pk")
+        username = res.get("username")
+
+        if not user_pk or not username:
+            raise AuthentikApiError(f"Failed to create standard user for LDAP Bind {name}")
 
         return user_pk, username
 
