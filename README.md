@@ -118,6 +118,14 @@ To deploy two outposts with SNI-based multiplexing:
 
 In this setup, Traefik's relation handlers automatically detect the custom domains and dynamically obtain distinct secure certificates for each subdomain from the related certificate provider (e.g. `self-signed-certificates` or `vault-k8s`).
 
+### 4. Production Ingress & Client IP Propagation (Proxy Protocol v2)
+
+For production deployments where LDAP rate limiting, logging, or IP-based lockout protection is required, preserving the original client source IP is critical. 
+
+* **Native Proxy Protocol v2**: When integrated with Traefik via the `traefik-route` relation, the operator automatically configures Traefik's load balancer to prepend Proxy Protocol version 2 headers on upstream TCP streams to the Outpost.
+* **Zero-Configuration Trust System**: The operator dynamically discovers Traefik's relation IP and automatically trusts the standard local cluster private subnets (RFC 1918 spaces: `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`) to guarantee that connections originating from ephemeral Traefik Pod IPs are safely decoded.
+* **Rate-Limit Isolation**: This ensures Authentik correctly identifies and rate-limits/locks-out malicious clients individually, preventing accidental cluster-wide denial of service.
+
 ---
 
 

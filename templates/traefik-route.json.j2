@@ -8,11 +8,19 @@
         "tls": {
           "passthrough": false
         }
+      },
+      "juju-{{ identifier }}-tcp-router-plain": {
+        "entryPoints": ["ldap"],
+        "rule": "HostSNI(`*`)",
+        "service": "juju-{{ identifier }}-tcp-service"
       }
     },
     "services": {
       "juju-{{ identifier }}-tcp-service": {
         "loadBalancer": {
+          "proxyProtocol": {
+            "version": 2
+          },
           "servers": [{ "address": "{{ app }}.{{ model }}.svc.cluster.local:{{ ldap_port }}" }]
         }
       }
