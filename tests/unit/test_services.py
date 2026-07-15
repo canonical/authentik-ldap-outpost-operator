@@ -131,3 +131,27 @@ class TestWorkloadService:
 
             service = WorkloadService(mock_unit)
             assert service.is_failing() is True
+
+    def test_version_success(self) -> None:
+        """Test that version returns the stripped and parsed version string."""
+        mock_unit = create_autospec(ops.Unit)
+        mock_container = MagicMock()
+        mock_unit.get_container.return_value = mock_container
+
+        mock_process = MagicMock()
+        mock_process.wait_output.return_value = (" version 2026.5.3\n", "")
+        mock_container.exec.return_value = mock_process
+
+        service = WorkloadService(mock_unit)
+        assert service.version == "2026.5.3"
+        mock_container.exec.assert_called_once_with(["/ldap", "--version"])
+
+    def test_version_failure(self) -> None:
+        """Test that version returns empty string on exception."""
+        mock_unit = create_autospec(ops.Unit)
+        mock_container = MagicMock()
+        mock_unit.get_container.return_value = mock_container
+        mock_container.exec.side_effect = Exception("Pebble error")
+
+        service = WorkloadService(mock_unit)
+        assert service.version == ""
