@@ -91,8 +91,6 @@ def test_build_and_deploy(juju: jubilant.Juju, charm: Path) -> None:
     )
 
     integrate_dependencies(juju)
-    juju.integrate(f"{APP_NAME}:traefik-route", TRAEFIK_APP)
-    juju.integrate(f"{TRAEFIK_APP}:certificates", f"{CA_APP}:certificates")
 
     juju.wait(
         ready=all_active(APP_NAME, SERVER_APP, DB_APP, WORKER_APP, TRAEFIK_APP, CA_APP),
