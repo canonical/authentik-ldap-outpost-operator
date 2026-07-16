@@ -174,26 +174,20 @@ class TestAuthentikApiClient:
         )
         mock_request.assert_any_call("/api/v3/flows/instances/default-provider-invalidation-flow/")
 
-    @patch.object(AuthentikApiClient, "_request_all")
     @patch.object(AuthentikApiClient, "_request")
-    def test_resolve_flow_ids_slug_fallback_to_list(
-        self, mock_request: MagicMock, mock_request_all: MagicMock, client: AuthentikApiClient
+    def test_resolve_flow_ids_slug_failure_raises_error(
+        self, mock_request: MagicMock, client: AuthentikApiClient
     ) -> None:
-        """Test that resolve_flow_ids falls back to listing all flows if slug lookup returns 404."""
+        """Test that resolve_flow_ids raises AuthentikApiError if direct slug lookup fails."""
         # Mock slug lookup raising 404
         mock_request.side_effect = AuthentikApiError("Not Found", status_code=404)
 
-        # Mock list response
-        mock_request_all.return_value = [
-            {"slug": "default-provider-authorization-implicit-consent", "pk": "auth-uuid"},
-            {"slug": "default-provider-invalidation-flow", "pk": "inval-uuid"},
-        ]
+        with pytest.raises(AuthentikApiError) as exc_info:
+            client.resolve_flow_ids()
 
-        auth_uuid, inval_uuid = client.resolve_flow_ids()
-
-        assert auth_uuid == "auth-uuid"
-        assert inval_uuid == "inval-uuid"
-        mock_request_all.assert_called_with("/api/v3/flows/instances/")
+        assert "Could not resolve default authorization or invalidation flows" in str(
+            exc_info.value
+        )
 
     @responses.activate
     def test_resolve_flow_ids_retries_on_404(
@@ -286,41 +280,41 @@ class TestAuthentikApiClient:
         client.delete_user(42)
         mock_request.assert_called_once_with("/api/v3/core/users/42/", method="DELETE")
 
-    @patch.object(AuthentikApiClient, "_request_all")
     @patch.object(AuthentikApiClient, "_request")
     def test_get_or_create_application_exists_patches(
-        self, mock_request: MagicMock, mock_request_all: MagicMock, client: AuthentikApiClient
+        self, mock_request: MagicMock, client: AuthentikApiClient
     ) -> None:
         """Test get_or_create_application updates existing application."""
-        mock_request_all.return_value = [
-            {"name": "test-app", "slug": "test-app-slug", "pk": 10},
+        mock_request.side_effect = [
+            {"name": "test-app", "slug": "test-app-slug", "pk": 10},  # direct slug lookup success
+            {},  # PATCH success
         ]
-        mock_request.return_value = {}
 
         client.get_or_create_application("test-app", "test-app-slug", 5)
 
-        mock_request_all.assert_called_once_with("/api/v3/core/applications/?search=test-app-slug")
-        mock_request.assert_called_once_with(
+        mock_request.assert_any_call("/api/v3/core/applications/test-app-slug/")
+        mock_request.assert_any_call(
             "/api/v3/core/applications/test-app-slug/",
             method="PATCH",
             data={"name": "test-app", "slug": "test-app-slug", "provider": 5},
         )
 
-    @patch.object(AuthentikApiClient, "_request_all")
     @patch.object(AuthentikApiClient, "_request")
     def test_get_or_create_application_new_posts(
-        self, mock_request: MagicMock, mock_request_all: MagicMock, client: AuthentikApiClient
+        self, mock_request: MagicMock, client: AuthentikApiClient
     ) -> None:
         """Test get_or_create_application creates new application if missing."""
-        mock_request_all.return_value = [
-            {"name": "other-app", "slug": "other-app-slug", "pk": 12},
+        mock_request.side_effect = [
+            AuthentikApiError("Not Found", status_code=404),  # direct slug check 404
+            {"results": []},  # fallback name filter query
+            {},  # POST success
         ]
-        mock_request.return_value = {}
 
         client.get_or_create_application("test-app", "test-app-slug", 5)
 
-        mock_request_all.assert_called_once_with("/api/v3/core/applications/?search=test-app-slug")
-        mock_request.assert_called_once_with(
+        mock_request.assert_any_call("/api/v3/core/applications/test-app-slug/")
+        mock_request.assert_any_call("/api/v3/core/applications/?name=test-app")
+        mock_request.assert_any_call(
             "/api/v3/core/applications/",
             method="POST",
             data={"name": "test-app", "slug": "test-app-slug", "provider": 5},

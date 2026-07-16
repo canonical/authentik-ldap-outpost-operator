@@ -37,7 +37,7 @@ from constants import (
     WORKLOAD_CONTAINER,
 )
 from env_vars import EnvVars
-from exceptions import PebbleError
+from exceptions import CharmError, PebbleError
 from integrations import (
     LdapProviderIntegration,
     ServerInfoIntegration,
@@ -503,7 +503,7 @@ class AuthentikLdapCharm(ops.CharmBase):
         ]:
             try:
                 can_plan = can_plan and f()
-            except Exception as e:
+            except CharmError as e:
                 logger.exception("Error in %s: %s", f.__name__, e)
                 can_plan = False
 

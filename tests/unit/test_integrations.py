@@ -139,7 +139,10 @@ class TestTraefikRouteIntegration:
                 "tcp": {
                     "routers": {
                         "juju-my-model-my-app-tcp-router": {"rule": "HostSNI(`*`)"},
-                        "juju-my-model-my-app-tcp-router-plain": {"entryPoints": ["ldap"], "rule": "HostSNI(`*`)"}
+                        "juju-my-model-my-app-tcp-router-plain": {
+                            "entryPoints": ["ldap"],
+                            "rule": "HostSNI(`*`)",
+                        },
                     },
                     "services": {
                         "juju-my-model-my-app-tcp-service": {
@@ -186,8 +189,8 @@ class TestTraefikRouteIntegration:
                         },
                         "juju-my-model-my-app-tcp-router-plain": {
                             "entryPoints": ["ldap"],
-                            "rule": "HostSNI(`*`)"
-                        }
+                            "rule": "HostSNI(`*`)",
+                        },
                     },
                     "services": {
                         "juju-my-model-my-app-tcp-service": {
