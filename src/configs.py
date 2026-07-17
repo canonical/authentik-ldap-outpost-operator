@@ -55,3 +55,12 @@ class CharmConfig:
             The configured ingress domain, or empty string if not configured.
         """
         return self._config.get("ingress_domain", "")
+
+    @property
+    def expose_ldap_ingress(self) -> bool:
+        """Whether to expose plain LDAP ingress via Traefik.
+
+        Returns:
+            True if plain LDAP ingress should be exposed, False otherwise.
+        """
+        return bool(self._config.get("expose_ldap_ingress", False))

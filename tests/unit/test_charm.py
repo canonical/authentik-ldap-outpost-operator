@@ -809,3 +809,51 @@ class TestTraefikRouteRelation:
         # Assert consumer relation gets ldaps_enabled=false
         consumer_rel = state_out.get_relation(ldap_relation.id)
         assert consumer_rel.local_app_data.get("ldaps_enabled") == "false"
+
+    def test_expose_ldap_ingress_config_change_submits_route(
+        self,
+        context: testing.Context,
+        server_info_relation: testing.Relation,
+        mocker: Any,
+    ) -> None:
+        """Test that changing expose_ldap_ingress triggers a new Traefik route submission."""
+        mock_submit = mocker.patch("integrations.TraefikRouteIntegration.submit_route")
+
+        secret_token = testing.Secret(
+            {"bootstrap-token": "token123"},
+            id="secret:xyz",
+        )
+        secret_password = testing.Secret(
+            {"bootstrap-password": "password123"},
+            id="secret:abc",
+        )
+
+        ldap_relation = testing.Relation(
+            endpoint="ldap",
+            interface="ldap",
+            remote_app_name="nextcloud",
+        )
+
+        peer_relation = testing.PeerRelation(
+            endpoint="authentik-ldap-peers",
+            interface="authentik_ldap_peers",
+            local_app_data={
+                "outpost_token": "mock-token-123",
+                f"client_{ldap_relation.id}_user_id": "42",
+                f"client_{ldap_relation.id}_username": "ldap-client-relation-1",
+                f"client_{ldap_relation.id}_password": "strongpassword",
+            },
+        )
+
+        state_in = create_state(
+            can_connect=True,
+            relations=[server_info_relation, ldap_relation, peer_relation],
+            secrets=[secret_token, secret_password],
+            config={"expose_ldap_ingress": True},
+        )
+
+        # Trigger config_changed
+        context.run(context.on.config_changed(), state_in)
+
+        # Assert submit_route was called as part of holistic reconciliation
+        mock_submit.assert_called()

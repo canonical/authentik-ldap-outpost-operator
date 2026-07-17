@@ -24,3 +24,10 @@ The charm SHALL set `ldaps_enabled=true` inside the `ldap` relation databag if a
 - **WHEN** the Traefik route is active and provides a valid external hostname
 - **THEN** the charm updates the `ldap` relation databag setting `ldaps_enabled=true` and publishes the secure connection URI `ldaps://<external_host>:636`
 
+### Requirement: Declare plain LDAP entrypoint when enabled
+When the `expose_ldap_ingress` configuration option is set to `true`, the charm SHALL declare a custom cleartext `ldap` entrypoint on port `389` using `HostSNI("*")` in addition to the secure `ldaps` entrypoint.
+
+#### Scenario: Submit plain LDAP route to Traefik when enabled
+- **WHEN** the `traefik-route` relation is established and `expose_ldap_ingress` is `true`
+- **THEN** the charm writes both the `ldaps` and `ldap` entrypoint definitions and their TCP route configurations to the Traefik relation databag
+

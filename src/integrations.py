@@ -23,6 +23,7 @@ from ops.charm import CharmBase
 
 from constants import (
     AUTHENTIK_INSECURE,
+    EXTERNAL_LDAP_PORT,
     LDAP_PORT,
     LDAP_RELATION,
     LDAPS_PORT,
@@ -189,6 +190,7 @@ class TraefikRouteIntegration:
         template = Template(template_content)
         ingress_domain = self._charm._config.ingress_domain
         rule = f"HostSNI(`{ingress_domain}`)" if ingress_domain else "HostSNI(`*`)"
+        expose_ldap_ingress = self._charm._config.expose_ldap_ingress
 
         rendered_json = template.render(
             identifier=identifier,
@@ -196,6 +198,7 @@ class TraefikRouteIntegration:
             model=model_name,
             rule=rule,
             ldap_port=LDAP_PORT,
+            expose_ldap_ingress=expose_ldap_ingress,
         )
 
         dynamic_config = json.loads(rendered_json)
@@ -205,13 +208,14 @@ class TraefikRouteIntegration:
                 "ldaps": {
                     "address": f":{LDAPS_PORT}",
                     "proxyProtocol": {"insecure": True},
-                },
-                "ldap": {
-                    "address": f":{LDAP_PORT}",
-                    "proxyProtocol": {"insecure": True},
-                },
+                }
             }
         }
+        if expose_ldap_ingress:
+            static_config["entryPoints"]["ldap"] = {
+                "address": f":{EXTERNAL_LDAP_PORT}",
+                "proxyProtocol": {"insecure": True},
+            }
 
         self._requirer.submit_to_traefik(config=dynamic_config, static=static_config)
 

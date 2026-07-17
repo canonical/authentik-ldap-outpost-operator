@@ -122,6 +122,7 @@ class TestTraefikRouteIntegration:
         mock_charm.app.name = "my-app"
         mock_charm.unit.is_leader.return_value = True
         mock_charm._config.ingress_domain = ""
+        mock_charm._config.expose_ldap_ingress = False
 
         mock_requirer = MagicMock()
         mocker.patch("integrations.TraefikRouteRequirer", return_value=mock_requirer)
@@ -168,6 +169,7 @@ class TestTraefikRouteIntegration:
         mock_charm.app.name = "my-app"
         mock_charm.unit.is_leader.return_value = True
         mock_charm._config.ingress_domain = "outpost.example.com"
+        mock_charm._config.expose_ldap_ingress = False
 
         mock_requirer = MagicMock()
         mocker.patch("integrations.TraefikRouteRequirer", return_value=mock_requirer)
@@ -205,6 +207,59 @@ class TestTraefikRouteIntegration:
                 "entryPoints": {
                     "ldaps": {"address": ":636", "proxyProtocol": {"insecure": True}},
                     "ldap": {"address": ":3389", "proxyProtocol": {"insecure": True}},
+                }
+            },
+        )
+
+    def test_submit_route_with_plain_ldap_ingress_enabled(self, mocker: Any) -> None:
+        """Test submit_route adds the plain LDAP entrypoint and router when enabled."""
+        mock_charm = mocker.MagicMock()
+        mock_charm.model.name = "my-model"
+        mock_charm.app.name = "my-app"
+        mock_charm.unit.is_leader.return_value = True
+        mock_charm._config.ingress_domain = ""
+        mock_charm._config.expose_ldap_ingress = True
+
+        mock_requirer = MagicMock()
+        mocker.patch("integrations.TraefikRouteRequirer", return_value=mock_requirer)
+
+        # Mock open to return template content that has conditional check
+        template_content = (
+            '{"tcp": {"routers": {'
+            '"juju-{{ identifier }}-tcp-router": {"rule": "{{ rule }}"}'
+            "{% if expose_ldap_ingress %},"
+            '"juju-{{ identifier }}-ldap-tcp-router": {"rule": "HostSNI(`*`)"}'
+            "{% endif %}"
+            '}, "services": {'
+            '"juju-{{ identifier }}-tcp-service": {"loadBalancer": {"servers": [{"address": "my-app.my-model.svc.cluster.local:{{ ldap_port }}"}]}}'
+            "}}}"
+        )
+        mock_open = mocker.mock_open(read_data=template_content)
+        mocker.patch("builtins.open", mock_open)
+
+        integration = TraefikRouteIntegration(mock_charm)
+        integration.submit_route()
+
+        mock_requirer.submit_to_traefik.assert_called_once_with(
+            config={
+                "tcp": {
+                    "routers": {
+                        "juju-my-model-my-app-tcp-router": {"rule": "HostSNI(`*`)"},
+                        "juju-my-model-my-app-ldap-tcp-router": {"rule": "HostSNI(`*`)"},
+                    },
+                    "services": {
+                        "juju-my-model-my-app-tcp-service": {
+                            "loadBalancer": {
+                                "servers": [{"address": "my-app.my-model.svc.cluster.local:3389"}]
+                            }
+                        }
+                    },
+                }
+            },
+            static={
+                "entryPoints": {
+                    "ldaps": {"address": ":636"},
+                    "ldap": {"address": ":389"},
                 }
             },
         )
