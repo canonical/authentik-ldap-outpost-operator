@@ -162,7 +162,7 @@ class TraefikRouteIntegration:
         a valid TLS certificate. This implies Traefik can also perform TLS termination
         for TCP traffic (LDAPS) using that same certificate.
         """
-        return self._requirer.scheme == "https"
+        return self.is_ready() and self._requirer.scheme == "https"
 
     def is_ready(self) -> bool:
         """Check if Traefik route is ready with a valid external host."""
