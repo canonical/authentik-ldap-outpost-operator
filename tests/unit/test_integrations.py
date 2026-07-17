@@ -127,7 +127,7 @@ class TestTraefikRouteIntegration:
         mocker.patch("integrations.TraefikRouteRequirer", return_value=mock_requirer)
 
         # Mock open to return template content with {{ rule }} and {{ ldap_port }}
-        template_content = '{"tcp": {"routers": {"juju-{{ identifier }}-tcp-router": {"rule": "{{ rule }}"}}, "services": {"juju-{{ identifier }}-tcp-service": {"loadBalancer": {"servers": [{"address": "my-app.my-model.svc.cluster.local:{{ ldap_port }}"}]}}}}}'
+        template_content = '{"tcp": {"routers": {"juju-{{ identifier }}-tcp-router": {"rule": "{{ rule }}"}, "juju-{{ identifier }}-tcp-router-plain": {"entryPoints": ["ldap"], "rule": "HostSNI(`*`)"}}, "services": {"juju-{{ identifier }}-tcp-service": {"loadBalancer": {"servers": [{"address": "my-app.my-model.svc.cluster.local:{{ ldap_port }}"}]}}}}}'
         mock_open = mocker.mock_open(read_data=template_content)
         mocker.patch("builtins.open", mock_open)
 
@@ -137,7 +137,13 @@ class TestTraefikRouteIntegration:
         mock_requirer.submit_to_traefik.assert_called_once_with(
             config={
                 "tcp": {
-                    "routers": {"juju-my-model-my-app-tcp-router": {"rule": "HostSNI(`*`)"}},
+                    "routers": {
+                        "juju-my-model-my-app-tcp-router": {"rule": "HostSNI(`*`)"},
+                        "juju-my-model-my-app-tcp-router-plain": {
+                            "entryPoints": ["ldap"],
+                            "rule": "HostSNI(`*`)",
+                        },
+                    },
                     "services": {
                         "juju-my-model-my-app-tcp-service": {
                             "loadBalancer": {
@@ -147,7 +153,12 @@ class TestTraefikRouteIntegration:
                     },
                 }
             },
-            static={"entryPoints": {"ldaps": {"address": ":636"}}},
+            static={
+                "entryPoints": {
+                    "ldaps": {"address": ":636", "proxyProtocol": {"insecure": True}},
+                    "ldap": {"address": ":3389", "proxyProtocol": {"insecure": True}},
+                }
+            },
         )
 
     def test_submit_route_submits_config_with_custom_domain(self, mocker: Any) -> None:
@@ -162,7 +173,7 @@ class TestTraefikRouteIntegration:
         mocker.patch("integrations.TraefikRouteRequirer", return_value=mock_requirer)
 
         # Mock open to return template content with {{ rule }} and {{ ldap_port }}
-        template_content = '{"tcp": {"routers": {"juju-{{ identifier }}-tcp-router": {"rule": "{{ rule }}"}}, "services": {"juju-{{ identifier }}-tcp-service": {"loadBalancer": {"servers": [{"address": "my-app.my-model.svc.cluster.local:{{ ldap_port }}"}]}}}}}'
+        template_content = '{"tcp": {"routers": {"juju-{{ identifier }}-tcp-router": {"rule": "{{ rule }}"}, "juju-{{ identifier }}-tcp-router-plain": {"entryPoints": ["ldap"], "rule": "HostSNI(`*`)"}}, "services": {"juju-{{ identifier }}-tcp-service": {"loadBalancer": {"servers": [{"address": "my-app.my-model.svc.cluster.local:{{ ldap_port }}"}]}}}}}'
         mock_open = mocker.mock_open(read_data=template_content)
         mocker.patch("builtins.open", mock_open)
 
@@ -175,7 +186,11 @@ class TestTraefikRouteIntegration:
                     "routers": {
                         "juju-my-model-my-app-tcp-router": {
                             "rule": "HostSNI(`outpost.example.com`)"
-                        }
+                        },
+                        "juju-my-model-my-app-tcp-router-plain": {
+                            "entryPoints": ["ldap"],
+                            "rule": "HostSNI(`*`)",
+                        },
                     },
                     "services": {
                         "juju-my-model-my-app-tcp-service": {
@@ -186,7 +201,12 @@ class TestTraefikRouteIntegration:
                     },
                 }
             },
-            static={"entryPoints": {"ldaps": {"address": ":636"}}},
+            static={
+                "entryPoints": {
+                    "ldaps": {"address": ":636", "proxyProtocol": {"insecure": True}},
+                    "ldap": {"address": ":3389", "proxyProtocol": {"insecure": True}},
+                }
+            },
         )
 
     def test_ldaps_enabled(self, mocker: Any) -> None:

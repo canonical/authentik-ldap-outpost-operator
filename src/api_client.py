@@ -157,16 +157,6 @@ class AuthentikApiClient:
                 endpoint = None
         return results
 
-    def _find_flow(self, flows: List[Any], slug: str, designation: str) -> Optional[str]:
-        """Find a flow matching the slug or falling back to designation."""
-        for flow in flows:
-            if flow.get("slug") == slug:
-                return flow.get("pk")
-        for flow in flows:
-            if flow.get("designation") == designation:
-                return flow.get("pk")
-        return None
-
     def _resolve_flow_ids_once(self) -> Tuple[str, str]:
         """Attempt to resolve standard flow IDs once.
 
@@ -196,25 +186,6 @@ class AuthentikApiClient:
         except AuthentikApiError as e:
             if e.status_code != 404:
                 raise e
-
-        # Fallback to fetching all flows only if direct resolution fails
-        if not auth_flow or not inval_flow:
-            logger.info(
-                "Could not resolve flows directly by slug; falling back to listing all flows."
-            )
-            results = self._request_all("/api/v3/flows/instances/")
-            if not auth_flow:
-                auth_flow = self._find_flow(
-                    results,
-                    "default-provider-authorization-implicit-consent",
-                    "authorization",
-                )
-            if not inval_flow:
-                inval_flow = self._find_flow(
-                    results,
-                    "default-provider-invalidation-flow",
-                    "invalidation",
-                )
 
         if not auth_flow or not inval_flow:
             raise AuthentikApiError(
@@ -360,7 +331,7 @@ class AuthentikApiClient:
         provider_data = {
             "name": name,
             "authentication_flow": bind_flow,
-            "authorization_flow": auth_flow,
+            "authorization_flow": bind_flow,
             "invalidation_flow": inval_flow,
             "base_dn": base_dn,
             "search_mode": search_mode,
@@ -419,13 +390,23 @@ class AuthentikApiClient:
             slug: The slug identifier of the Application.
             provider_pk: The ID of the bound LDAP Provider.
         """
-        apps = self._request_all(f"/api/v3/core/applications/?search={quote(slug)}")
         app_pk = None
 
-        for app in apps:
-            if app.get("slug") == slug or app.get("name") == name:
-                app_pk = app.get("pk")
-                break
+        # Try direct lookup by slug (Fast Path)
+        try:
+            app = self._request(f"/api/v3/core/applications/{slug}/")
+            app_pk = app.get("pk")
+        except AuthentikApiError as e:
+            if e.status_code != 404:
+                raise e
+
+        # Fallback to name search only if slug direct lookup 404s (Slow Path / Safety Net)
+        if not app_pk:
+            encoded_name = quote(name)
+            res = self._request(f"/api/v3/core/applications/?name={encoded_name}")
+            results = res.get("results", [])
+            if results:
+                app_pk = results[0].get("pk")
 
         app_data = {
             "name": name,
@@ -555,6 +536,38 @@ class AuthentikApiClient:
 
         if not user_pk or not username:
             raise AuthentikApiError(f"Failed to create service account {name}")
+
+        return user_pk, username
+
+    def create_ldap_bind_user(self, name: str) -> Tuple[int, str]:
+        """Create a standard user account to act as an LDAP Bind account.
+
+        Args:
+            name: Username and name of the LDAP bind user.
+
+        Returns:
+            A tuple of (user_pk, username).
+        """
+        encoded_username = quote(name)
+        existing = self._request(f"/api/v3/core/users/?username={encoded_username}")
+        results = existing.get("results", [])
+        for user in results:
+            if user.get("username") == name:
+                return user.get("pk"), user.get("username")
+
+        logger.info("Creating standard user for LDAP Bind: %s", name)
+        payload = {
+            "username": name,
+            "name": name,
+            "path": "users",
+            "is_active": True,
+        }
+        res = self._request("/api/v3/core/users/", method="POST", data=payload)
+        user_pk = res.get("pk")
+        username = res.get("username")
+
+        if not user_pk or not username:
+            raise AuthentikApiError(f"Failed to create standard user for LDAP Bind {name}")
 
         return user_pk, username
 

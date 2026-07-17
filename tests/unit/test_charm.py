@@ -66,6 +66,22 @@ class TestCollectStatus:
             "missing authentik-server-info relation"
         )
 
+    def test_when_server_info_present_but_not_ready_adds_waiting_status(
+        self, context: testing.Context
+    ) -> None:
+        """Test that Juju status is WaitingStatus when server info relation exists but is not ready."""
+        relation = testing.Relation(
+            endpoint="authentik-server-info",
+            interface="authentik-server-info",
+            remote_app_name="authentik-server",
+            remote_app_data={},
+        )
+        state_in = create_state(can_connect=True, relations=[relation])
+        state_out = context.run(context.on.collect_unit_status(), state_in)
+        assert state_out.unit_status == testing.WaitingStatus(
+            "waiting for authentik-server-info data"
+        )
+
     def test_when_all_ready_adds_active_status(
         self, context: testing.Context, server_info_relation: testing.Relation
     ) -> None:

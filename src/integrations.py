@@ -200,7 +200,18 @@ class TraefikRouteIntegration:
 
         dynamic_config = json.loads(rendered_json)
 
-        static_config = {"entryPoints": {"ldaps": {"address": f":{LDAPS_PORT}"}}}
+        static_config = {
+            "entryPoints": {
+                "ldaps": {
+                    "address": f":{LDAPS_PORT}",
+                    "proxyProtocol": {"insecure": True},
+                },
+                "ldap": {
+                    "address": f":{LDAP_PORT}",
+                    "proxyProtocol": {"insecure": True},
+                },
+            }
+        }
 
         self._requirer.submit_to_traefik(config=dynamic_config, static=static_config)
 

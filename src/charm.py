@@ -32,11 +32,12 @@ from constants import (
     METRICS_PORT,
     PEBBLE_READY_CHECK_NAME,
     PEER_RELATION,
+    SERVER_INFO_RELATION,
     TRACING_RELATION,
     WORKLOAD_CONTAINER,
 )
 from env_vars import EnvVars
-from exceptions import PebbleError
+from exceptions import CharmError, PebbleError
 from integrations import (
     LdapProviderIntegration,
     ServerInfoIntegration,
@@ -74,7 +75,7 @@ class AuthentikLdapCharm(ops.CharmBase):
         self._container = self.unit.get_container(WORKLOAD_CONTAINER)
         self._pebble = PebbleService(self.unit)
         self._workload_service = WorkloadService(self.unit)
-        self._config = CharmConfig(self.model.config)
+        self._config = CharmConfig(self, self.model.config)
 
         self.server_info = ServerInfoIntegration(self)
         self.ldap_provider = LdapProviderIntegration(self)
@@ -95,7 +96,6 @@ class AuthentikLdapCharm(ops.CharmBase):
         self.resources_patch = KubernetesComputeResourcesPatch(
             self, WORKLOAD_CONTAINER, resource_reqs_func=self._resource_reqs_from_config
         )
-        self._api_error = None
 
         # Observe events that trigger the holistic handler
         for event in [
@@ -503,7 +503,7 @@ class AuthentikLdapCharm(ops.CharmBase):
         ]:
             try:
                 can_plan = can_plan and f()
-            except Exception as e:
+            except CharmError as e:
                 logger.exception("Error in %s: %s", f.__name__, e)
                 can_plan = False
 
@@ -521,12 +521,12 @@ class AuthentikLdapCharm(ops.CharmBase):
             event.add_status(ops.WaitingStatus("waiting for pebble"))
             return
 
-        if not self.server_info.is_ready():
+        if not self.model.relations.get(SERVER_INFO_RELATION):
             event.add_status(ops.BlockedStatus("missing authentik-server-info relation"))
             return
 
-        if getattr(self, "_api_error", None):
-            event.add_status(ops.WaitingStatus(self._api_error))
+        if not self.server_info.is_ready():
+            event.add_status(ops.WaitingStatus("waiting for authentik-server-info data"))
             return
 
         if not self._get_peer_data("outpost_token"):
@@ -554,13 +554,7 @@ class AuthentikLdapCharm(ops.CharmBase):
             bool: True if provisioning succeeded and we have the token.
         """
         if self.unit.is_leader():
-            try:
-                self._provision_authentik_resources()
-                self._api_error = None
-            except Exception as e:
-                self._api_error = f"API error: {e}"
-                logger.error("Error during resource provisioning: %s", e)
-                return False
+            self._provision_authentik_resources()
 
         return bool(self._get_peer_data("outpost_token"))
 
@@ -584,8 +578,6 @@ class AuthentikLdapCharm(ops.CharmBase):
 
         if self.unit.is_leader() and not user_id:
             self._provision_service_account(relation_id)
-            if self._api_error:
-                return False
             creds = self._get_relation_credentials(relation_id)
             user_id = creds.get("user_id")
 
@@ -643,50 +635,41 @@ class AuthentikLdapCharm(ops.CharmBase):
         return success
 
     def _provision_service_account(self, relation_id: int) -> None:
-        """Provision an Authentik Service Account for a given relation ID."""
+        """Provision an Authentik User account for a given relation ID to act as LDAP Bind."""
         info = self.server_info.get_info()
         if not info:
             return
 
-        try:
-            client = AuthentikApiClient(info.host, info.bootstrap_token)
-            sa_name = f"ldap-client-{self.app.name}-{relation_id}"
-            user_pk, username = client.create_service_account(sa_name)
+        client = AuthentikApiClient(info.host, info.bootstrap_token)
+        sa_name = f"ldap-client-{self.app.name}-{relation_id}"
+        user_pk, username = client.create_ldap_bind_user(sa_name)
 
-            password = secrets.token_urlsafe(16)
-            client.set_user_password(user_pk, password)
+        password = secrets.token_urlsafe(16)
+        client.set_user_password(user_pk, password)
 
-            search_group_name = self.model.config.get("search_group")
-            if search_group_name:
-                group_uuid = client.get_group_by_name(search_group_name)
-                if group_uuid:
-                    client.add_user_to_group(group_uuid, user_pk)
-                else:
-                    logger.warning(
-                        "LDAP search group '%s' not found on Authentik Server. User may not be able to perform searches.",
-                        search_group_name,
-                    )
+        search_group_name = self.model.config.get("search_group")
+        if search_group_name:
+            group_uuid = client.get_group_by_name(search_group_name)
+            if group_uuid:
+                client.add_user_to_group(group_uuid, user_pk)
+            else:
+                logger.warning(
+                    "LDAP search group '%s' not found on Authentik Server. User may not be able to perform searches.",
+                    search_group_name,
+                )
 
-            payload = json.dumps({
-                "user_id": str(user_pk),
-                "username": username,
-                "password": password,
-            })
-            self._set_peer_data(f"client_{relation_id}", payload)
-            logger.info(
-                "Successfully provisioned Service Account '%s' (ID %s) for relation %s",
-                username,
-                user_pk,
-                relation_id,
-            )
-            self._api_error = None
-        except Exception as e:
-            logger.error(
-                "Failed to provision Service Account for relation %s: %s",
-                relation_id,
-                e,
-            )
-            self._api_error = f"API error: {e}"
+        payload = json.dumps({
+            "user_id": str(user_pk),
+            "username": username,
+            "password": password,
+        })
+        self._set_peer_data(f"client_{relation_id}", payload)
+        logger.info(
+            "Successfully provisioned LDAP Bind User '%s' (ID %s) for relation %s",
+            username,
+            user_pk,
+            relation_id,
+        )
 
     def _resource_reqs_from_config(self) -> ResourceRequirements:
         """Get resource requirements from charm config.

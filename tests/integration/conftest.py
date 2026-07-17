@@ -11,7 +11,7 @@ import subprocess
 
 import jubilant
 import pytest
-from integration.constants import APP_NAME, DB_APP, SERVER_APP, WORKER_APP
+from integration.constants import APP_NAME, CA_APP, DB_APP, SERVER_APP, TRAEFIK_APP, WORKER_APP
 
 logger = logging.getLogger(__name__)
 
@@ -35,3 +35,6 @@ def integrate_dependencies(juju: jubilant.Juju) -> None:
     juju.integrate(DB_APP, SERVER_APP)
     juju.integrate(f"{SERVER_APP}:authentik-cluster", WORKER_APP)
     juju.integrate(f"{SERVER_APP}:authentik-server-info", APP_NAME)
+    juju.integrate(f"{SERVER_APP}:traefik-route", TRAEFIK_APP)
+    juju.integrate(f"{APP_NAME}:traefik-route", TRAEFIK_APP)
+    juju.integrate(f"{TRAEFIK_APP}:certificates", f"{CA_APP}:certificates")

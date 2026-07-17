@@ -74,9 +74,12 @@ class WorkloadService:
             Version string or empty string on error.
         """
         try:
-            process = self._container.exec([COMMAND, "version"])
+            process = self._container.exec([COMMAND, "--version"])
             stdout, _ = process.wait_output()
-            return stdout.strip()
+            cleaned = stdout.strip()
+            if cleaned.lower().startswith("version "):
+                cleaned = cleaned[8:].strip()
+            return cleaned
         except Exception:
             return ""
 
