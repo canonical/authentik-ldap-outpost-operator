@@ -157,7 +157,6 @@ class TestTraefikRouteIntegration:
             static={
                 "entryPoints": {
                     "ldaps": {"address": ":636", "proxyProtocol": {"insecure": True}},
-                    "ldap": {"address": ":3389", "proxyProtocol": {"insecure": True}},
                 }
             },
         )
@@ -206,7 +205,6 @@ class TestTraefikRouteIntegration:
             static={
                 "entryPoints": {
                     "ldaps": {"address": ":636", "proxyProtocol": {"insecure": True}},
-                    "ldap": {"address": ":3389", "proxyProtocol": {"insecure": True}},
                 }
             },
         )
@@ -258,8 +256,8 @@ class TestTraefikRouteIntegration:
             },
             static={
                 "entryPoints": {
-                    "ldaps": {"address": ":636"},
-                    "ldap": {"address": ":389"},
+                    "ldaps": {"address": ":636", "proxyProtocol": {"insecure": True}},
+                    "ldap": {"address": ":389", "proxyProtocol": {"insecure": True}},
                 }
             },
         )
