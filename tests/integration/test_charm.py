@@ -21,10 +21,12 @@ from integration.constants import (
     EXTERNAL_HOSTNAME,
     SERVER_APP,
     SERVER_CHANNEL,
+    SERVER_REVISION,
     TRAEFIK_APP,
     TRAEFIK_CHANNEL,
     WORKER_APP,
     WORKER_CHANNEL,
+    WORKER_REVISION,
 )
 from integration.utils import (
     StatusPredicate,
@@ -61,12 +63,14 @@ def test_build_and_deploy(juju: jubilant.Juju, charm: Path) -> None:
     juju.deploy(
         WORKER_APP,
         channel=WORKER_CHANNEL,
+        revision=WORKER_REVISION,
         trust=True,
     )
 
     juju.deploy(
         SERVER_APP,
         channel=SERVER_CHANNEL,
+        revision=SERVER_REVISION,
         trust=True,
     )
 
