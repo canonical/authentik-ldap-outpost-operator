@@ -1,7 +1,9 @@
 # traefik-route-integration Specification
 
 ## Purpose
-TBD - created by archiving change integrate-traefik-route. Update Purpose after archive.
+
+This specification defines the requirements for integrating the Authentik LDAP Outpost Charm with Traefik Route to expose custom secure LDAPS (Port 636) and optional unencrypted LDAP (Port 389) endpoints, allowing external clients to connect to the LDAP outpost.
+
 ## Requirements
 ### Requirement: Expose traefik-route integration for LDAPS
 The charm SHALL define a `traefik-route` integration of interface `traefik_route` to declare custom TCP entrypoints for Port 636 (LDAPS).

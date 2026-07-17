@@ -1,3 +1,8 @@
+# traefik-route-integration Delta Specification
+
+## Purpose
+This delta specification defines the additions to the Traefik route integration requirements to dynamically register standard cleartext LDAP TCP routers on port 389.
+
 ## ADDED Requirements
 
 ### Requirement: Declare plain LDAP entrypoint when enabled

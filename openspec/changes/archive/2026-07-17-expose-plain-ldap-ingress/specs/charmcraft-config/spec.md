@@ -1,3 +1,8 @@
+# charmcraft-config Delta Specification
+
+## Purpose
+This delta specification defines the additions to the Juju charm configuration (`charmcraft.yaml`) to support optionally exposing the cleartext LDAP endpoint.
+
 ## ADDED Requirements
 
 ### Requirement: Expose plain LDAP configuration option
