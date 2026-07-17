@@ -144,7 +144,7 @@ unit = [
 requires-dist = [
     { name = "authentik-ldap-outpost-operator", extras = ["fmt", "lint", "unit", "integration"], marker = "extra == 'dev'" },
     { name = "codespell", marker = "extra == 'lint'" },
-    { name = "cosl", specifier = "~=1.9.2" },
+    { name = "cosl", specifier = "~=1.10.1" },
     { name = "coverage", extras = ["toml"], marker = "extra == 'unit'" },
     { name = "isort", marker = "extra == 'fmt'" },
     { name = "isort", marker = "extra == 'lint'" },
@@ -317,7 +317,7 @@ wheels = [
 
 [[package]]
 name = "cosl"
-version = "1.9.2"
+version = "1.10.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "ops" },
@@ -326,9 +326,9 @@ dependencies = [
     { name = "tenacity" },
     { name = "typing-extensions" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/00/3e/2f8fe3f460b18cea99722f3cdb885d494de1cc9accef1cd18535c14de3f1/cosl-1.9.2.tar.gz", hash = "sha256:4999be5574c679f8070806f125b2c50fc4bdaa78e8f8247b17868af20e82bcfd", size = 150799, upload-time = "2026-06-16T15:00:42.378Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/ef/84/6da25e5e0da58419b8d3252a6707bb97f05866fa7c6098ae35e302626c65/cosl-1.10.1.tar.gz", hash = "sha256:6f49482707e5e5163fd47fc90226189d51c0867d49ff65109d3e96ccf9dad5e4", size = 152093, upload-time = "2026-07-14T15:51:48.262Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/66/be/93e0b9eb3de24b5fd670e1de2dac2ab9bdb6e2fcd659a806830aa07bc6ca/cosl-1.9.2-py3-none-any.whl", hash = "sha256:b78248720fc250fb8f3b872c2e0eae760129d80ac76829a556ecc963fe793b81", size = 38346, upload-time = "2026-06-16T15:00:41.215Z" },
+    { url = "https://files.pythonhosted.org/packages/d8/e6/c576f8ebc071dc5edd18a56f66eb0388511d3ece04188812996d4dc72e5b/cosl-1.10.1-py3-none-any.whl", hash = "sha256:845bdbaaaf22b992e5b8dfa87af3e8f3f8004a14ba172b07017274f844aaa9bc", size = 39269, upload-time = "2026-07-14T15:51:46.887Z" },
 ]
 
 [[package]]
