@@ -8,13 +8,14 @@
         "tls": {
           "passthrough": false
         }
-      },
-      "juju-{{ identifier }}-tcp-router-plain": {
+      }{% if expose_ldap_ingress %},
+      "juju-{{ identifier }}-ldap-tcp-router": {
         "entryPoints": ["ldap"],
         "rule": "HostSNI(`*`)",
         "service": "juju-{{ identifier }}-tcp-service"
-      }
+      }{% endif %}
     },
+
     "services": {
       "juju-{{ identifier }}-tcp-service": {
         "loadBalancer": {

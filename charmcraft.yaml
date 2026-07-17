@@ -81,6 +81,20 @@ config:
         If unset, the route rule defaults to "HostSNI(`*`)" to match all incoming TLS traffic on port 636.
       type: string
       default: ""
+    expose_ldap_ingress:
+      description: |
+        Enable exposing the plain LDAP endpoint (Port 389/3389) via Traefik.
+
+        WARNING: Plain LDAP does not encrypt connection traffic. Use this option
+        only if your Traefik instance is internal/private and your legacy clients
+        do not support LDAPS.
+
+        Note: Since cleartext TCP traffic lacks TLS/SNI, Traefik routes this
+        via HostSNI(`*`). If multiple charms/outposts try to enable this on the
+        same Traefik instance, a port/routing conflict will occur.
+      type: boolean
+      default: false
+
 
 
 

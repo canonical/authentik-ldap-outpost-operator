@@ -13,7 +13,6 @@ This specification defines the declarative Juju charm configuration (`charmcraft
   - `ldap` (provide LDAP connections to consuming apps)
   - `ingress` & `ldaps-ingress` (expose LDAP/S outside the K8s cluster)
   - `authentik-ldap-peers` (replicate outpost unit states)
-
 ## Requirements
 ### Requirement: Container name matches constant
 `charmcraft.yaml` SHALL declare a container named `authentik-ldap` matching `WORKLOAD_CONTAINER` in `src/constants.py`. The container SHALL NOT set `gid` or `uid` fields.
@@ -65,4 +64,11 @@ The `pg-database` relation SHALL be removed.
 #### Scenario: No undefined constant references
 - **WHEN** `src/charm.py` and `src/integrations.py` import from `constants`
 - **THEN** all imported names resolve without `ImportError`
+
+### Requirement: Expose plain LDAP configuration option
+The charm `charmcraft.yaml` MUST declare a boolean configuration option named `expose_ldap_ingress` with a default value of `false`.
+
+#### Scenario: Configuration option is declared with correct default
+- **WHEN** the charm metadata is parsed
+- **THEN** the configuration contains `expose_ldap_ingress` of type `boolean` with a default of `false`
 

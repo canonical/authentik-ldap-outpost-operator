@@ -8,6 +8,7 @@ SERVICE_NAME = "authentik-ldap"
 COMMAND = "/ldap"
 LDAP_PORT = 3389
 LDAPS_PORT = 636
+EXTERNAL_LDAP_PORT = 389
 METRICS_PORT = 9300
 
 SERVER_INFO_RELATION = "authentik-server-info"
