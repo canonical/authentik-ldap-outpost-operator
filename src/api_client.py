@@ -13,6 +13,48 @@ import tenacity
 logger = logging.getLogger(__name__)
 
 
+DEFAULT_LDAP_PROPERTY_MAPPINGS = [
+    {
+        "name": "authentik default LDAP Mapping: entryDN",
+        "object_field": "entryDN",
+        "expression": 'return f"cn={user.username},ou=users,{provider.base_dn}"',
+    },
+    {
+        "name": "authentik default LDAP Mapping: POSIX uidNumber/gidNumber",
+        "object_field": "uidNumber",
+        "expression": (
+            "# Extracts the authoritative UID/GID synced from the upstream directory\n"
+            "return {\n"
+            '    "uidNumber": user.attributes.get("uidNumber"),\n'
+            '    "gidNumber": user.attributes.get("gidNumber")\n'
+            "}"
+        ),
+    },
+    {
+        "name": "authentik default LDAP Mapping: POSIX homeDirectory/loginShell",
+        "object_field": "homeDirectory",
+        "expression": (
+            "# Extracts the authoritative POSIX home directory and shell synced from upstream\n"
+            "return {\n"
+            '    "homeDirectory": user.attributes.get("homeDirectory") or user.attributes.get("home_directory"),\n'
+            '    "loginShell": user.attributes.get("loginShell") or user.attributes.get("login_shell")\n'
+            "}"
+        ),
+    },
+    {
+        "name": "authentik default LDAP Mapping: sshPublicKey",
+        "object_field": "sshPublicKey",
+        "expression": (
+            "# Fetches multi-valued SSH public keys from user attributes list\n"
+            'keys = user.attributes.get("ssh_public_key") or user.attributes.get("ssh_public_keys")\n'
+            "if isinstance(keys, list):\n"
+            "    return keys\n"
+            "return [keys] if keys else None"
+        ),
+    },
+]
+
+
 class AuthentikApiError(Exception):
     """Base exception for Authentik API errors."""
 
@@ -297,6 +339,40 @@ class AuthentikApiClient:
         logger.info("Successfully created LDAP Bind Flow and bound its stages.")
         return flow_pk
 
+    def get_or_create_ldap_property_mappings(self) -> list[str]:
+        """Find or create the default LDAP Provider Property Mappings.
+
+        Returns:
+            The list of string UUIDs (pk) of the Property Mappings.
+        """
+        pks = []
+        endpoint = "/api/v3/propertymappings/source/ldap/"
+
+        for mapping_def in DEFAULT_LDAP_PROPERTY_MAPPINGS:
+            name = mapping_def["name"]
+            # Search for an existing mapping with this name
+            mappings = self._request_all(f"/api/v3/propertymappings/all/?search={quote(name)}")
+            mapping_pk = None
+            for mapping in mappings:
+                if mapping.get("name") == name:
+                    logger.info("Found existing LDAP Property Mapping '%s'.", name)
+                    mapping_pk = mapping["pk"]
+                    break
+
+            if not mapping_pk:
+                logger.info("LDAP Property Mapping '%s' not found. Creating a new one.", name)
+                payload = {
+                    "name": name,
+                    "object_field": mapping_def["object_field"],
+                    "expression": mapping_def["expression"],
+                }
+                res = self._request(endpoint, method="POST", data=payload)
+                mapping_pk = res["pk"]
+
+            pks.append(mapping_pk)
+
+        return pks
+
     def get_or_create_provider(
         self,
         name: str,
@@ -327,6 +403,22 @@ class AuthentikApiClient:
 
         auth_flow, inval_flow = self.resolve_flow_ids()
         bind_flow = self.get_or_create_ldap_bind_flow()
+        default_mappings = self.get_or_create_ldap_property_mappings()
+
+        # If provider exists, fetch the current config to preserve any existing property mappings
+        existing_mappings = []
+        if provider_pk:
+            try:
+                current_prov = self._request(f"/api/v3/providers/ldap/{provider_pk}/")
+                existing_mappings = current_prov.get("property_mappings", [])
+            except AuthentikApiError:
+                logger.warning("Failed to fetch current config for provider ID %s", provider_pk)
+
+        # Merge preserving existing mappings and avoiding duplicates
+        all_mappings = list(existing_mappings)
+        for mapping in default_mappings:
+            if mapping not in all_mappings:
+                all_mappings.append(mapping)
 
         provider_data = {
             "name": name,
@@ -337,6 +429,7 @@ class AuthentikApiClient:
             "search_mode": search_mode,
             "bind_mode": bind_mode,
             "mfa_support": mfa_support,
+            "property_mappings": all_mappings,
         }
 
         if provider_pk:
