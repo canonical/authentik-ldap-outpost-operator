@@ -62,7 +62,7 @@ config:
     search_group:
       description: The name of the group whose members can search the directory.
       type: string
-      default: "authentik Admingroup"
+      default: "authentik Admins"
     search_mode:
       description: "LDAP search mode: direct or cached."
       type: string
