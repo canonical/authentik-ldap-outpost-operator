@@ -857,3 +857,124 @@ class TestTraefikRouteRelation:
 
         # Assert submit_route was called as part of holistic reconciliation
         mock_submit.assert_called()
+
+    def test_search_group_missing_does_not_update_last_search_group(
+        self,
+        context: testing.Context,
+        server_info_relation: testing.Relation,
+        mocked_api_client: Any,
+    ) -> None:
+        """Test that if the search group is missing from Authentik, peer config metadata is not updated."""
+        secret_token = testing.Secret(
+            {"bootstrap-token": "token123"},
+            id="secret:xyz",
+        )
+        secret_password = testing.Secret(
+            {"bootstrap-password": "password123"},
+            id="secret:abc",
+        )
+        ldap_relation = testing.Relation(
+            endpoint="ldap",
+            interface="ldap",
+            remote_app_name="nextcloud",
+        )
+        peer_relation = testing.PeerRelation(
+            endpoint="authentik-ldap-peers",
+            interface="authentik_ldap_peers",
+            local_app_data={
+                "provider_pk": "1",
+                "outpost_uuid": "outpost-uuid",
+                "outpost_token": "mock-token-123",
+                "last_base_dn": "dc=ldap,dc=goauthentik,dc=io",
+                "last_search_mode": "direct",
+                "last_bind_mode": "direct",
+                "last_mfa_support": "False",
+                "last_search_group": "old-group",
+            },
+        )
+        state_in = create_state(
+            can_connect=True,
+            relations=[server_info_relation, ldap_relation, peer_relation],
+            secrets=[secret_token, secret_password],
+            config={"search_group": "missing-group"},
+        )
+
+        mock_client = mocked_api_client.return_value
+        mock_client.check_outpost_exists.return_value = True
+        mock_client.get_group_by_name.return_value = None
+
+        import pytest
+        from scenario.errors import UncaughtCharmError
+
+        with pytest.raises(UncaughtCharmError) as exc_info:
+            context.run(context.on.config_changed(), state_in)
+
+        # Assert get_group_by_name was called for 'missing-group'
+        mock_client.get_group_by_name.assert_any_call("missing-group")
+
+        # Assert the inner exception is indeed our ValueError
+        assert "ValueError" in str(exc_info.value)
+        assert "LDAP search group 'missing-group' not found on Authentik Server" in str(exc_info.value)
+
+    def test_search_group_changed_updates_existing_users(
+        self,
+        context: testing.Context,
+        server_info_relation: testing.Relation,
+        mocked_api_client: Any,
+    ) -> None:
+        """Test that changing search_group config updates existing service accounts' group memberships."""
+        import json
+        secret_token = testing.Secret(
+            {"bootstrap-token": "token123"},
+            id="secret:xyz",
+        )
+        secret_password = testing.Secret(
+            {"bootstrap-password": "password123"},
+            id="secret:abc",
+        )
+        ldap_relation = testing.Relation(
+            endpoint="ldap",
+            interface="ldap",
+            remote_app_name="nextcloud",
+        )
+        peer_relation = testing.PeerRelation(
+            endpoint="authentik-ldap-peers",
+            interface="authentik_ldap_peers",
+            local_app_data={
+                "provider_pk": "1",
+                "outpost_uuid": "outpost-uuid",
+                "outpost_token": "mock-token-123",
+                "last_base_dn": "dc=ldap,dc=goauthentik,dc=io",
+                "last_search_mode": "direct",
+                "last_bind_mode": "direct",
+                "last_mfa_support": "False",
+                "last_search_group": "old-group",
+                f"client_{ldap_relation.id}": json.dumps({
+                    "user_id": "42",
+                    "username": "ldap-client-relation-1",
+                    "password": "strongpassword",
+                }),
+            },
+        )
+        state_in = create_state(
+            can_connect=True,
+            relations=[server_info_relation, ldap_relation, peer_relation],
+            secrets=[secret_token, secret_password],
+            config={"search_group": "new-group"},
+        )
+
+        mock_client = mocked_api_client.return_value
+        mock_client.check_outpost_exists.return_value = True
+        mock_client.get_group_by_name.side_effect = lambda name: "group-uuid-abc" if name == "new-group" else None
+
+        state_out = context.run(context.on.config_changed(), state_in)
+
+        # Assert get_group_by_name was called for 'new-group'
+        mock_client.get_group_by_name.assert_any_call("new-group")
+
+        # Assert add_user_to_group was called with user_id 42 and group-uuid-abc
+        mock_client.add_user_to_group.assert_called_once_with("group-uuid-abc", 42)
+
+        # Assert last_search_group got updated in peer relation
+        peer_rel_out = state_out.get_relation(peer_relation.id)
+        assert peer_rel_out.local_app_data.get("last_search_group") == "new-group"

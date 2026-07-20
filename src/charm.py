@@ -189,6 +189,7 @@ class AuthentikLdapCharm(ops.CharmBase):
         search_mode: str,
         bind_mode: str,
         mfa_support: bool,
+        search_group: str,
     ) -> None:
         """Store config values in peer relation to track changes.
 
@@ -197,11 +198,44 @@ class AuthentikLdapCharm(ops.CharmBase):
             search_mode: The directory search mode.
             bind_mode: The bind access mode.
             mfa_support: Whether MFA is enabled.
+            search_group: The name of the directory search group.
         """
         self._set_peer_data("last_base_dn", base_dn or "")
         self._set_peer_data("last_search_mode", search_mode or "")
         self._set_peer_data("last_bind_mode", bind_mode or "")
         self._set_peer_data("last_mfa_support", str(mfa_support))
+        self._set_peer_data("last_search_group", search_group or "")
+
+    def _update_existing_users_groups(self, client: AuthentikApiClient, search_group_name: str) -> None:
+        """Update existing relation users' group membership on Authentik.
+
+        Args:
+            client: The AuthentikApiClient instance.
+            search_group_name: The name of the search group.
+        """
+        if not search_group_name:
+            logger.warning("No search group name configured; skipping existing user updates.")
+            return
+
+        group_uuid = client.get_group_by_name(search_group_name)
+        if not group_uuid:
+            raise ValueError(f"LDAP search group '{search_group_name}' not found on Authentik Server")
+
+        active_relations = self.model.relations.get(LDAP_RELATION, [])
+        for relation in active_relations:
+            creds = self._get_relation_credentials(relation.id)
+            if user_id := creds.get("user_id"):
+                try:
+                    client.add_user_to_group(group_uuid, int(user_id))
+                    logger.info(
+                        "Successfully added existing service account user %s to group %s",
+                        user_id,
+                        search_group_name,
+                    )
+                except Exception as e:
+                    raise RuntimeError(
+                        f"Failed to add service account user {user_id} to search group '{search_group_name}'"
+                    ) from e
 
     def _verify_and_update_existing_resources(
         self,
@@ -213,6 +247,7 @@ class AuthentikLdapCharm(ops.CharmBase):
         search_mode: str,
         bind_mode: str,
         mfa_support: bool,
+        search_group: str,
         config_unchanged: bool,
     ) -> bool:
         """Verify the existing outpost resources and update provider config if changed.
@@ -226,6 +261,7 @@ class AuthentikLdapCharm(ops.CharmBase):
             search_mode: The directory search mode.
             bind_mode: The bind access mode.
             mfa_support: Whether MFA is enabled.
+            search_group: The name of the directory search group.
             config_unchanged: True if configuration matches cached values.
 
         Returns:
@@ -253,11 +289,18 @@ class AuthentikLdapCharm(ops.CharmBase):
                 mfa_support=mfa_support,
             )
 
+            # Re-sync group membership for existing users if search_group changed
+            last_search_group = self._get_peer_data("last_search_group")
+            if last_search_group != search_group:
+                self._update_existing_users_groups(client, search_group)
+
             # Store config values in peer relation to track changes
-            self._set_peer_config_metadata(base_dn, search_mode, bind_mode, mfa_support)
+            self._set_peer_config_metadata(base_dn, search_mode, bind_mode, mfa_support, search_group)
 
             logger.info("Successfully updated Authentik LDAP Provider configuration.")
             return True
+        except (ValueError, RuntimeError):
+            raise
         except Exception as e:
             logger.warning("Failed to verify or update existing resources, re-provisioning: %s", e)
             return False
@@ -269,6 +312,7 @@ class AuthentikLdapCharm(ops.CharmBase):
         search_mode: str,
         bind_mode: str,
         mfa_support: bool,
+        search_group: str,
     ) -> None:
         """Create and sync fresh Provider, Application, and Outpost resources on Authentik.
 
@@ -278,7 +322,13 @@ class AuthentikLdapCharm(ops.CharmBase):
             search_mode: The directory search mode.
             bind_mode: The bind access mode.
             mfa_support: Whether MFA is enabled.
+            search_group: The name of the directory search group.
         """
+        if search_group:
+            group_uuid = client.get_group_by_name(search_group)
+            if not group_uuid:
+                raise ValueError(f"LDAP search group '{search_group}' not found on Authentik Server")
+
         # Create/Sync Provider
         provider_name = f"ldap-provider-{self.app.name}"
         provider_pk = client.get_or_create_provider(
@@ -314,7 +364,7 @@ class AuthentikLdapCharm(ops.CharmBase):
         self._set_peer_data("outpost_token", outpost_token)
 
         # Store config values in peer relation to track changes
-        self._set_peer_config_metadata(base_dn, search_mode, bind_mode, mfa_support)
+        self._set_peer_config_metadata(base_dn, search_mode, bind_mode, mfa_support, search_group)
 
         logger.info(
             "Successfully provisioned Authentik resources: Provider ID %s, Outpost UUID %s",
@@ -336,6 +386,7 @@ class AuthentikLdapCharm(ops.CharmBase):
         search_mode = self.model.config.get("search_mode", "direct")
         bind_mode = self.model.config.get("bind_mode", "direct")
         mfa_support = bool(self.model.config.get("mfa_support", False))
+        search_group = self.model.config.get("search_group", "")
 
         provider_pk_peer = self._get_peer_data("provider_pk")
         outpost_uuid_peer = self._get_peer_data("outpost_uuid")
@@ -345,12 +396,14 @@ class AuthentikLdapCharm(ops.CharmBase):
         last_search_mode = self._get_peer_data("last_search_mode")
         last_bind_mode = self._get_peer_data("last_bind_mode")
         last_mfa_support = self._get_peer_data("last_mfa_support")
+        last_search_group = self._get_peer_data("last_search_group")
 
         config_unchanged = (
             last_base_dn == base_dn
             and last_search_mode == search_mode
             and last_bind_mode == bind_mode
             and last_mfa_support == str(mfa_support)
+            and last_search_group == search_group
         )
 
         client = AuthentikApiClient(info.host, info.bootstrap_token)
@@ -364,6 +417,7 @@ class AuthentikLdapCharm(ops.CharmBase):
             search_mode=search_mode,
             bind_mode=bind_mode,
             mfa_support=mfa_support,
+            search_group=search_group,
             config_unchanged=config_unchanged,
         ):
             return
@@ -374,6 +428,7 @@ class AuthentikLdapCharm(ops.CharmBase):
             search_mode=search_mode,
             bind_mode=bind_mode,
             mfa_support=mfa_support,
+            search_group=search_group,
         )
 
     def _get_tracked_relation_ids(self) -> set[int]:
