@@ -206,7 +206,9 @@ class AuthentikLdapCharm(ops.CharmBase):
         self._set_peer_data("last_mfa_support", str(mfa_support))
         self._set_peer_data("last_search_group", search_group or "")
 
-    def _update_existing_users_groups(self, client: AuthentikApiClient, search_group_name: str) -> None:
+    def _update_existing_users_groups(
+        self, client: AuthentikApiClient, search_group_name: str
+    ) -> None:
         """Update existing relation users' group membership on Authentik.
 
         Args:
@@ -219,7 +221,9 @@ class AuthentikLdapCharm(ops.CharmBase):
 
         group_uuid = client.get_group_by_name(search_group_name)
         if not group_uuid:
-            raise ValueError(f"LDAP search group '{search_group_name}' not found on Authentik Server")
+            raise ValueError(
+                f"LDAP search group '{search_group_name}' not found on Authentik Server"
+            )
 
         active_relations = self.model.relations.get(LDAP_RELATION, [])
         for relation in active_relations:
@@ -295,7 +299,9 @@ class AuthentikLdapCharm(ops.CharmBase):
                 self._update_existing_users_groups(client, search_group)
 
             # Store config values in peer relation to track changes
-            self._set_peer_config_metadata(base_dn, search_mode, bind_mode, mfa_support, search_group)
+            self._set_peer_config_metadata(
+                base_dn, search_mode, bind_mode, mfa_support, search_group
+            )
 
             logger.info("Successfully updated Authentik LDAP Provider configuration.")
             return True
@@ -327,7 +333,9 @@ class AuthentikLdapCharm(ops.CharmBase):
         if search_group:
             group_uuid = client.get_group_by_name(search_group)
             if not group_uuid:
-                raise ValueError(f"LDAP search group '{search_group}' not found on Authentik Server")
+                raise ValueError(
+                    f"LDAP search group '{search_group}' not found on Authentik Server"
+                )
 
         # Create/Sync Provider
         provider_name = f"ldap-provider-{self.app.name}"

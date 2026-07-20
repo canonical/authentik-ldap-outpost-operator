@@ -319,3 +319,152 @@ class TestAuthentikApiClient:
             method="POST",
             data={"name": "test-app", "slug": "test-app-slug", "provider": 5},
         )
+
+    @patch.object(AuthentikApiClient, "_request_all")
+    @patch.object(AuthentikApiClient, "_request")
+    def test_get_or_create_ldap_property_mappings_all_exist(
+        self, mock_request: MagicMock, mock_request_all: MagicMock, client: AuthentikApiClient
+    ) -> None:
+        """Test get_or_create_ldap_property_mappings returns existing mappings without creating."""
+        mock_request_all.side_effect = [
+            [{"name": "authentik default LDAP Mapping: entryDN", "pk": "uuid-1"}],
+            [
+                {
+                    "name": "authentik default LDAP Mapping: POSIX uidNumber/gidNumber",
+                    "pk": "uuid-2",
+                }
+            ],
+            [
+                {
+                    "name": "authentik default LDAP Mapping: POSIX homeDirectory/loginShell",
+                    "pk": "uuid-3",
+                }
+            ],
+            [{"name": "authentik default LDAP Mapping: sshPublicKey", "pk": "uuid-4"}],
+        ]
+
+        pks = client.get_or_create_ldap_property_mappings()
+
+        assert pks == ["uuid-1", "uuid-2", "uuid-3", "uuid-4"]
+        assert mock_request_all.call_count == 4
+        mock_request.assert_not_called()
+
+    @patch.object(AuthentikApiClient, "_request_all")
+    @patch.object(AuthentikApiClient, "_request")
+    def test_get_or_create_ldap_property_mappings_creates_missing(
+        self, mock_request: MagicMock, mock_request_all: MagicMock, client: AuthentikApiClient
+    ) -> None:
+        """Test get_or_create_ldap_property_mappings creates mapping if missing."""
+        mock_request_all.return_value = []  # none exist
+        mock_request.side_effect = [
+            {"pk": "new-uuid-1"},
+            {"pk": "new-uuid-2"},
+            {"pk": "new-uuid-3"},
+            {"pk": "new-uuid-4"},
+        ]
+
+        pks = client.get_or_create_ldap_property_mappings()
+
+        assert pks == ["new-uuid-1", "new-uuid-2", "new-uuid-3", "new-uuid-4"]
+        assert mock_request_all.call_count == 4
+        assert mock_request.call_count == 4
+
+    @patch.object(AuthentikApiClient, "get_or_create_ldap_property_mappings")
+    @patch.object(AuthentikApiClient, "get_or_create_ldap_bind_flow")
+    @patch.object(AuthentikApiClient, "resolve_flow_ids")
+    @patch.object(AuthentikApiClient, "_request_all")
+    @patch.object(AuthentikApiClient, "_request")
+    def test_get_or_create_provider_creates_new(
+        self,
+        mock_request: MagicMock,
+        mock_request_all: MagicMock,
+        mock_resolve_flows: MagicMock,
+        mock_bind_flow: MagicMock,
+        mock_mappings: MagicMock,
+        client: AuthentikApiClient,
+    ) -> None:
+        """Test get_or_create_provider creates new provider when missing and assigns property mappings."""
+        mock_request_all.return_value = []  # no existing providers
+        mock_resolve_flows.return_value = ("auth-flow-uuid", "inval-flow-uuid")
+        mock_bind_flow.return_value = "bind-flow-uuid"
+        mock_mappings.return_value = ["uuid-1", "uuid-2", "uuid-3", "uuid-4"]
+        mock_request.return_value = {"pk": 42}
+
+        provider_pk = client.get_or_create_provider(
+            name="test-provider",
+            base_dn="dc=example,dc=com",
+            search_mode="direct",
+            bind_mode="direct",
+            mfa_support=False,
+        )
+
+        assert provider_pk == 42
+        mock_request_all.assert_called_once_with("/api/v3/providers/ldap/?search=test-provider")
+        mock_request.assert_called_once_with(
+            "/api/v3/providers/ldap/",
+            method="POST",
+            data={
+                "name": "test-provider",
+                "authentication_flow": "bind-flow-uuid",
+                "authorization_flow": "bind-flow-uuid",
+                "invalidation_flow": "inval-flow-uuid",
+                "base_dn": "dc=example,dc=com",
+                "search_mode": "direct",
+                "bind_mode": "direct",
+                "mfa_support": False,
+                "property_mappings": ["uuid-1", "uuid-2", "uuid-3", "uuid-4"],
+            },
+        )
+
+    @patch.object(AuthentikApiClient, "get_or_create_ldap_property_mappings")
+    @patch.object(AuthentikApiClient, "get_or_create_ldap_bind_flow")
+    @patch.object(AuthentikApiClient, "resolve_flow_ids")
+    @patch.object(AuthentikApiClient, "_request_all")
+    @patch.object(AuthentikApiClient, "_request")
+    def test_get_or_create_provider_syncs_existing(
+        self,
+        mock_request: MagicMock,
+        mock_request_all: MagicMock,
+        mock_resolve_flows: MagicMock,
+        mock_bind_flow: MagicMock,
+        mock_mappings: MagicMock,
+        client: AuthentikApiClient,
+    ) -> None:
+        """Test get_or_create_provider patches existing provider merging property mappings."""
+        mock_request_all.return_value = [{"name": "test-provider", "pk": 42}]
+        mock_resolve_flows.return_value = ("auth-flow-uuid", "inval-flow-uuid")
+        mock_bind_flow.return_value = "bind-flow-uuid"
+        mock_mappings.return_value = ["uuid-1", "uuid-2", "uuid-3", "uuid-4"]
+
+        # side_effect for mock_request:
+        # First call is the GET on /api/v3/providers/ldap/42/
+        # Second call is the PATCH on /api/v3/providers/ldap/42/
+        mock_request.side_effect = [{"property_mappings": ["existing-uuid"]}, {"pk": 42}]
+
+        provider_pk = client.get_or_create_provider(
+            name="test-provider",
+            base_dn="dc=example,dc=com",
+            search_mode="direct",
+            bind_mode="direct",
+            mfa_support=False,
+        )
+
+        assert provider_pk == 42
+        mock_request_all.assert_called_once_with("/api/v3/providers/ldap/?search=test-provider")
+
+        mock_request.assert_any_call("/api/v3/providers/ldap/42/")
+        mock_request.assert_any_call(
+            "/api/v3/providers/ldap/42/",
+            method="PATCH",
+            data={
+                "name": "test-provider",
+                "authentication_flow": "bind-flow-uuid",
+                "authorization_flow": "bind-flow-uuid",
+                "invalidation_flow": "inval-flow-uuid",
+                "base_dn": "dc=example,dc=com",
+                "search_mode": "direct",
+                "bind_mode": "direct",
+                "mfa_support": False,
+                "property_mappings": ["existing-uuid", "uuid-1", "uuid-2", "uuid-3", "uuid-4"],
+            },
+        )

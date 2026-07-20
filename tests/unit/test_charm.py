@@ -914,7 +914,9 @@ class TestTraefikRouteRelation:
 
         # Assert the inner exception is indeed our ValueError
         assert "ValueError" in str(exc_info.value)
-        assert "LDAP search group 'missing-group' not found on Authentik Server" in str(exc_info.value)
+        assert "LDAP search group 'missing-group' not found on Authentik Server" in str(
+            exc_info.value
+        )
 
     def test_search_group_changed_updates_existing_users(
         self,
@@ -924,6 +926,7 @@ class TestTraefikRouteRelation:
     ) -> None:
         """Test that changing search_group config updates existing service accounts' group memberships."""
         import json
+
         secret_token = testing.Secret(
             {"bootstrap-token": "token123"},
             id="secret:xyz",
@@ -965,7 +968,9 @@ class TestTraefikRouteRelation:
 
         mock_client = mocked_api_client.return_value
         mock_client.check_outpost_exists.return_value = True
-        mock_client.get_group_by_name.side_effect = lambda name: "group-uuid-abc" if name == "new-group" else None
+        mock_client.get_group_by_name.side_effect = lambda name: (
+            "group-uuid-abc" if name == "new-group" else None
+        )
 
         state_out = context.run(context.on.config_changed(), state_in)
 
