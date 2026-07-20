@@ -29,3 +29,11 @@ output "provides" {
     ldap              = "ldap"
   }
 }
+
+output "offers" {
+  description = "The Juju offers that the charm provides"
+  value = {
+    ldap = juju_offer.ldap
+  }
+}
+

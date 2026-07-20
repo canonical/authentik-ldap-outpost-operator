@@ -24,3 +24,11 @@ resource "juju_application" "application" {
     revision = var.revision
   }
 }
+
+resource "juju_offer" "ldap" {
+  name             = "ldap"
+  model_uuid       = var.model_uuid
+  application_name = juju_application.application.name
+  endpoints        = ["ldap"]
+}
+
