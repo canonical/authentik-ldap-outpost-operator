@@ -36,4 +36,5 @@
 | <a name="output_application"></a> [application](#output\_application) | The deployed juju\_application resource |
 | <a name="output_requires"></a> [requires](#output\_requires) | The Juju integrations that the charm requires |
 | <a name="output_provides"></a> [provides](#output\_provides) | The Juju integrations that the charm provides |
+| <a name="output_offers"></a> [offers](#output\_offers) | The Juju offers that the charm provides |
 <!-- END_TF_DOCS -->
