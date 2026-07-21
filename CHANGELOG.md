@@ -1,5 +1,23 @@
 # Changelog
 
+## [1.1.0](https://github.com/canonical/authentik-ldap-outpost-operator/compare/v1.0.0...v1.1.0) (2026-07-21)
+
+
+### Features
+
+* **terraform:** add ldap juju offer ([#41](https://github.com/canonical/authentik-ldap-outpost-operator/issues/41)) ([c262166](https://github.com/canonical/authentik-ldap-outpost-operator/commit/c2621666fc7e9cfefb36e83a6869c0e59520d239))
+
+
+### Bug Fixes
+
+* add ldap juju offer ([f1052f0](https://github.com/canonical/authentik-ldap-outpost-operator/commit/f1052f02eb7e23763d70fe5ee1c79ec1260dff99))
+* create and assign standard entryDN property mapping for LDAP Provider ([#44](https://github.com/canonical/authentik-ldap-outpost-operator/issues/44)) ([1fc8604](https://github.com/canonical/authentik-ldap-outpost-operator/commit/1fc8604ac49d19560b6d04d978d872978fafd5fc))
+* **deps:** update dependency cosl to ~=1.10.1 ([d83cabc](https://github.com/canonical/authentik-ldap-outpost-operator/commit/d83cabcbbe543da72e80c0bc255e61100c608e98))
+* **deps:** update dependency cosl to ~=1.10.1 ([#32](https://github.com/canonical/authentik-ldap-outpost-operator/issues/32)) ([fb54e4c](https://github.com/canonical/authentik-ldap-outpost-operator/commit/fb54e4c2c3844cbc6766528ee054a0bf8955dcb8))
+* implement search group validation, caching, and existing user sync ([0494c62](https://github.com/canonical/authentik-ldap-outpost-operator/commit/0494c623424c71c24dc3c66444b884fca05a9ea9))
+* implement search group validation, caching, and existing user sync ([#42](https://github.com/canonical/authentik-ldap-outpost-operator/issues/42)) ([0a12994](https://github.com/canonical/authentik-ldap-outpost-operator/commit/0a12994ce2ca8accd0a1329cb39ad82daad0a279))
+* support diverse LDAP clients by automatically creating and assigning default property mappings ([e0ac3f6](https://github.com/canonical/authentik-ldap-outpost-operator/commit/e0ac3f692f65c8cf7b8848ff0169312bac6b9206))
+
 ## 1.0.0 (2026-07-17)
 
 
