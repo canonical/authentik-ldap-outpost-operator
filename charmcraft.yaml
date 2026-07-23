@@ -59,18 +59,14 @@ config:
       description: Base DN under which LDAP objects are accessible.
       type: string
       default: "dc=ldap,dc=goauthentik,dc=io"
-    search_group:
-      description: The name of the group whose members can search the directory.
-      type: string
-      default: "authentik Admins"
     search_mode:
       description: "LDAP search mode: direct or cached."
       type: string
-      default: "direct"
+      default: "cached"
     bind_mode:
       description: "LDAP bind mode: direct or cached."
       type: string
-      default: "direct"
+      default: "cached"
     mfa_support:
       description: Enable/disable multi-factor authentication support via password-appending.
       type: boolean

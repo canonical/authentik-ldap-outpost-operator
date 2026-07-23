@@ -40,8 +40,7 @@ class ServerInfo:
     """Server info retrieved from the relation."""
 
     host: str
-    bootstrap_token: str
-    bootstrap_password: str
+    api_token: str
 
 
 class ServerInfoIntegration(EnvVarConvertible):
@@ -61,15 +60,19 @@ class ServerInfoIntegration(EnvVarConvertible):
         return self._server_info.is_ready()
 
     def get_info(self) -> Optional[ServerInfo]:
-        """Get the ServerInfo object."""
+        """Get the ServerInfo object.
+
+        The bootstrap password is not required: the outpost authenticates to the
+        Authentik API with the dedicated automation token, resolved via the
+        library's canonical ``api-token`` key.
+        """
         if not self.is_ready():
             return None
         host = self._server_info.get_authentik_host()
         token = self._server_info.get_authentik_token()
-        password = self._server_info.get_bootstrap_password()
-        if not (host and token and password):
+        if not (host and token):
             return None
-        return ServerInfo(host=host, bootstrap_token=token, bootstrap_password=password)
+        return ServerInfo(host=host, api_token=token)
 
     def to_env_vars(self) -> EnvVars:
         """Build environment variables from server info."""
@@ -78,7 +81,7 @@ class ServerInfoIntegration(EnvVarConvertible):
             return {}
         return {
             "AUTHENTIK_HOST": info.host,
-            "AUTHENTIK_TOKEN": info.bootstrap_token,
+            "AUTHENTIK_TOKEN": info.api_token,
             "AUTHENTIK_INSECURE": AUTHENTIK_INSECURE,
         }
 
@@ -94,6 +97,10 @@ class LdapProviderIntegration:
     def provider(self) -> LdapProvider:
         """The LDAP provider instance."""
         return self._provider
+
+    def get_bind_password(self, relation_id: int) -> Optional[str]:
+        """Retrieve the library-managed bind password for a relation."""
+        return self._provider.get_bind_password(relation_id)
 
     def update_relation_data(
         self,

@@ -4,11 +4,14 @@
 """Authentik REST API client using requests."""
 
 import logging
+from dataclasses import dataclass
 from typing import Any, List, Optional, Tuple
 from urllib.parse import quote, urlparse
 
 import requests
 import tenacity
+
+from exceptions import AuthentikAuthorizationError, AuthentikMigrationError
 
 logger = logging.getLogger(__name__)
 
@@ -55,18 +58,65 @@ DEFAULT_LDAP_PROPERTY_MAPPINGS = [
 ]
 
 
+LDAP_SEARCH_PERMISSION = "authentik_providers_ldap.search_full_directory"
+LDAP_PROVIDER_MODEL = "authentik_providers_ldap.ldapprovider"
+LDAP_PROVIDER_APP_LABEL = "authentik_providers_ldap"
+
+
+@dataclass(frozen=True)
+class AuthentikRole:
+    """An Authentik RBAC role."""
+
+    pk: str
+    name: str
+
+
+@dataclass(frozen=True)
+class AuthentikProvider:
+    """The Authentik LDAP provider fields the charm reads."""
+
+    pk: int
+    name: str
+
+
+@dataclass(frozen=True)
+class AuthentikUser:
+    """The Authentik user fields the charm reads."""
+
+    pk: int
+    username: str
+    name: str
+
+
+@dataclass(frozen=True)
+class AssignedPermission:
+    """An Authentik permission assigned globally or to one object."""
+
+    codename: str
+    model: str
+    app_label: str
+    object_pk: Optional[str] = None
+
+
 class AuthentikApiError(Exception):
     """Base exception for Authentik API errors."""
 
-    def __init__(self, message: str, status_code: Optional[int] = None):
-        """Initialize the API error with optional status code.
 
-        Args:
-            message: Exception message.
-            status_code: Optional HTTP status code.
-        """
+class AuthentikHttpError(AuthentikApiError):
+    """Authentik returned an unsuccessful HTTP response."""
+
+    def __init__(self, message: str, status_code: int):
+        """Initialize an HTTP error with its response status."""
         super().__init__(message)
         self.status_code = status_code
+
+
+class AuthentikNotFoundError(AuthentikHttpError):
+    """The requested Authentik resource does not exist."""
+
+
+class AuthentikConnectionError(AuthentikApiError):
+    """The request could not reach Authentik."""
 
 
 class AuthentikApiClient:
@@ -80,7 +130,11 @@ class AuthentikApiClient:
             token: The administrator bootstrap or API token.
         """
         self._host = host.rstrip("/")
-        self._token = token
+        self._session = requests.Session()
+        self._session.headers.update({
+            "Authorization": f"Bearer {token}",
+            "Accept": "application/json",
+        })
 
     def _do_request(self, method: str, endpoint: str, data: Optional[Any] = None) -> Any:
         """Execute a single HTTP request.
@@ -97,16 +151,11 @@ class AuthentikApiClient:
             AuthentikApiError: If the request fails.
         """
         url = f"{self._host}{endpoint}"
-        headers = {
-            "Authorization": f"Bearer {self._token}",
-            "Accept": "application/json",
-        }
 
         try:
-            response = requests.request(
+            response = self._session.request(
                 method=method,
                 url=url,
-                headers=headers,
                 json=data,
                 timeout=15,
             )
@@ -116,11 +165,9 @@ class AuthentikApiClient:
 
             return response.json() if response.text else {}
         except requests.exceptions.HTTPError as e:
-            try:
-                err_body = e.response.text
-            except Exception:
-                err_body = "Could not read error body"
-            status_code = e.response.status_code if e.response is not None else None
+            response = e.response
+            status_code = response.status_code if response is not None else 0
+            err_body = response.text if response is not None else "Could not read error body"
             logger.error(
                 "Authentik API HTTP Error %s for %s %s: %s",
                 status_code,
@@ -128,12 +175,15 @@ class AuthentikApiClient:
                 endpoint,
                 err_body,
             )
-            raise AuthentikApiError(
-                f"HTTP Error {status_code}: {err_body}", status_code=status_code
-            ) from e
-        except Exception as e:
+            error_type = AuthentikNotFoundError if status_code == 404 else AuthentikHttpError
+            raise error_type(f"HTTP Error {status_code}: {err_body}", status_code) from e
+        except ValueError as e:
+            raise AuthentikApiError("Authentik API returned invalid JSON") from e
+        except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as e:
             logger.error("Failed to connect to Authentik API: %s", e)
-            raise AuthentikApiError(f"Connection failure: {e}") from e
+            raise AuthentikConnectionError(f"Connection failure: {e}") from e
+        except requests.exceptions.RequestException as e:
+            raise AuthentikApiError(f"Authentik request failure: {e}") from e
 
     def _request(
         self,
@@ -155,26 +205,21 @@ class AuthentikApiClient:
             AuthentikApiError: If the request fails.
         """
 
-        def _should_retry(exception: Exception) -> bool:
-            """Determine if we should retry the API request."""
-            if isinstance(exception, AuthentikApiError):
-                if exception.status_code == 503:
-                    return True
-                if "Connection failure" in str(exception):
-                    return True
-            return False
+        def _should_retry(exception: BaseException) -> bool:
+            """Retry only failures that can reasonably be transient."""
+            return isinstance(exception, AuthentikConnectionError) or (
+                isinstance(exception, AuthentikHttpError)
+                and (exception.status_code == 429 or exception.status_code >= 500)
+            )
 
-        try:
-            for attempt in tenacity.Retrying(
-                stop=tenacity.stop_after_delay(180),
-                wait=tenacity.wait_exponential(multiplier=1, min=5, max=15),
-                retry=tenacity.retry_if_exception(_should_retry),
-                reraise=True,
-            ):
-                with attempt:
-                    return self._do_request(method, endpoint, data)
-        except tenacity.RetryError as e:
-            raise AuthentikApiError(f"API request timed out: {e}") from e
+        for attempt in tenacity.Retrying(
+            stop=tenacity.stop_after_attempt(3),
+            wait=tenacity.wait_exponential(multiplier=1, min=1, max=4),
+            retry=tenacity.retry_if_exception(_should_retry),
+            reraise=True,
+        ):
+            with attempt:
+                return self._do_request(method, endpoint, data)
 
     def _request_all(self, endpoint: str) -> List[Any]:
         """Fetch all results from a paginated endpoint.
@@ -199,79 +244,19 @@ class AuthentikApiClient:
                 endpoint = None
         return results
 
-    def _resolve_flow_ids_once(self) -> Tuple[str, str]:
-        """Attempt to resolve standard flow IDs once.
+    def resolve_invalidation_flow_id(self) -> str:
+        """Resolve the default provider invalidation flow by slug.
 
         Returns:
-            A tuple of (authorization_flow_uuid, invalidation_flow_uuid).
+            The UUID of the default invalidation flow.
 
         Raises:
-            AuthentikApiError: If standard flows cannot be found.
+            AuthentikApiError: If the flow is absent or malformed.
         """
-        auth_flow = None
-        inval_flow = None
-
-        # Try to resolve authorization flow directly by slug
-        try:
-            res = self._request(
-                "/api/v3/flows/instances/default-provider-authorization-implicit-consent/"
-            )
-            auth_flow = res.get("pk")
-        except AuthentikApiError as e:
-            if e.status_code != 404:
-                raise e
-
-        # Try to resolve invalidation flow directly by slug
-        try:
-            res = self._request("/api/v3/flows/instances/default-provider-invalidation-flow/")
-            inval_flow = res.get("pk")
-        except AuthentikApiError as e:
-            if e.status_code != 404:
-                raise e
-
-        if not auth_flow or not inval_flow:
-            raise AuthentikApiError(
-                "Could not resolve default authorization or invalidation flows",
-                status_code=404,
-            )
-
-        return auth_flow, inval_flow
-
-    def resolve_flow_ids(self) -> Tuple[str, str]:
-        """Dynamically find default authorization and invalidation flow UUIDs with retry.
-
-        Returns:
-            A tuple of (authorization_flow_uuid, invalidation_flow_uuid).
-
-        Raises:
-            AuthentikApiError: If standard flows cannot be found after retries.
-        """
-
-        def _should_retry(exception: Exception) -> bool:
-            """Determine if we should retry flow resolution."""
-            return isinstance(exception, AuthentikApiError) and exception.status_code == 404
-
-        def _before_sleep(retry_state: Any) -> None:
-            """Log a warning before sleeping between retries."""
-            logger.warning(
-                "Default Authentik flows not ready yet (attempt %d); retrying...",
-                retry_state.attempt_number,
-            )
-
-        try:
-            for attempt in tenacity.Retrying(
-                stop=tenacity.stop_after_delay(120),
-                wait=tenacity.wait_exponential(multiplier=1, min=5, max=15),
-                retry=tenacity.retry_if_exception(_should_retry),
-                before_sleep=_before_sleep,
-                reraise=True,
-            ):
-                with attempt:
-                    return self._resolve_flow_ids_once()
-        except tenacity.RetryError as e:
-            raise AuthentikApiError(
-                "Could not resolve default authorization or invalidation flows after retries"
-            ) from e
+        res = self._request("/api/v3/flows/instances/default-provider-invalidation-flow/")
+        if flow_pk := res.get("pk"):
+            return flow_pk
+        raise AuthentikApiError("Could not resolve default invalidation flow")
 
     def _find_stage(self, stages: List[Any], name: str) -> Optional[str]:
         """Find a stage UUID by its name."""
@@ -291,9 +276,8 @@ class AuthentikApiClient:
             flow = self._request("/api/v3/flows/instances/default-ldap-bind-flow/")
             if flow_pk := flow.get("pk"):
                 return flow_pk
-        except AuthentikApiError as e:
-            if e.status_code != 404:
-                raise e
+        except AuthentikNotFoundError:
+            pass
 
         logger.info("LDAP Bind Flow not found. Creating a new one.")
         flow_data = {
@@ -401,7 +385,7 @@ class AuthentikApiClient:
                 provider_pk = prov.get("pk")
                 break
 
-        auth_flow, inval_flow = self.resolve_flow_ids()
+        inval_flow = self.resolve_invalidation_flow_id()
         bind_flow = self.get_or_create_ldap_bind_flow()
         default_mappings = self.get_or_create_ldap_property_mappings()
 
@@ -489,9 +473,8 @@ class AuthentikApiClient:
         try:
             app = self._request(f"/api/v3/core/applications/{slug}/")
             app_pk = app.get("pk")
-        except AuthentikApiError as e:
-            if e.status_code != 404:
-                raise e
+        except AuthentikNotFoundError:
+            pass
 
         # Fallback to name search only if slug direct lookup 404s (Slow Path / Safety Net)
         if not app_pk:
@@ -568,6 +551,183 @@ class AuthentikApiClient:
 
         return outpost_pk, token_identifier
 
+    @staticmethod
+    def _one_exact(
+        records: list[dict[str, Any]], field: str, value: Any, resource: str
+    ) -> Optional[dict[str, Any]]:
+        """Return one exact record and reject an ambiguous API result."""
+        matches = [record for record in records if record.get(field) == value]
+        if len(matches) > 1:
+            raise AuthentikMigrationError(
+                f"Authentik returned multiple {resource} records with {field}={value!r}"
+            )
+        return matches[0] if matches else None
+
+    @staticmethod
+    def _parse_provider(record: dict[str, Any]) -> AuthentikProvider:
+        """Parse the LDAP provider fields."""
+        try:
+            return AuthentikProvider(pk=int(record["pk"]), name=str(record["name"]))
+        except (KeyError, TypeError, ValueError) as error:
+            raise AuthentikMigrationError("Malformed LDAP provider response") from error
+
+    @staticmethod
+    def _parse_user(record: dict[str, Any]) -> AuthentikUser:
+        """Parse the user fields."""
+        try:
+            return AuthentikUser(
+                pk=int(record["pk"]),
+                username=str(record["username"]),
+                name=str(record.get("name", record["username"])),
+            )
+        except (KeyError, TypeError, ValueError) as error:
+            raise AuthentikMigrationError("Malformed Authentik user response") from error
+
+    def get_provider(self, provider_pk: int) -> AuthentikProvider:
+        """Get an LDAP provider by its trusted integer primary key."""
+        return self._parse_provider(self._request(f"/api/v3/providers/ldap/{provider_pk}/"))
+
+    def find_user_by_username(self, username: str) -> Optional[AuthentikUser]:
+        """Find one user by exact username."""
+        records = self._request_all(f"/api/v3/core/users/?username={quote(username)}")
+        record = self._one_exact(records, "username", username, "user")
+        return self._parse_user(record) if record else None
+
+    def rename_user(self, user_pk: int, username: str) -> None:
+        """Rename a user selected by trusted integer primary key."""
+        self._request(
+            f"/api/v3/core/users/{user_pk}/",
+            method="PATCH",
+            data={"username": username, "name": username},
+        )
+
+    def get_role_by_name(self, name: str) -> Optional[AuthentikRole]:
+        """Find one Authentik role by exact name."""
+        records = self._request_all(f"/api/v3/rbac/roles/?name={quote(name)}")
+        record = self._one_exact(records, "name", name, "role")
+        if not record:
+            return None
+        try:
+            return AuthentikRole(pk=str(record["pk"]), name=str(record["name"]))
+        except (KeyError, TypeError) as error:
+            raise AuthentikMigrationError("Malformed Authentik role response") from error
+
+    def create_role(self, name: str) -> AuthentikRole:
+        """Create and parse an Authentik role."""
+        record = self._request("/api/v3/rbac/roles/", method="POST", data={"name": name})
+        try:
+            return AuthentikRole(pk=str(record["pk"]), name=str(record["name"]))
+        except (KeyError, TypeError) as error:
+            raise AuthentikMigrationError("Malformed Authentik role creation response") from error
+
+    def get_or_create_role(self, name: str) -> AuthentikRole:
+        """Return the exact role or create it when absent."""
+        return self.get_role_by_name(name) or self.create_role(name)
+
+    def add_user_to_role(self, role_uuid: str, user_pk: int) -> None:
+        """Idempotently add an integer user primary key to a role."""
+        self._request(
+            f"/api/v3/rbac/roles/{role_uuid}/add_user/",
+            method="POST",
+            data={"pk": user_pk},
+        )
+
+    def get_group_by_name(self, name: str) -> Optional[str]:
+        """Return the UUID of an Authentik group with the exact name, or None."""
+        records = self._request_all(f"/api/v3/core/groups/?name={quote(name)}")
+        for record in records:
+            if record.get("name") == name:
+                return record.get("pk")
+        return None
+
+    def add_user_to_group(self, group_uuid: str, user_pk: int) -> None:
+        """Idempotently add an integer user primary key to a group."""
+        self._request(
+            f"/api/v3/core/groups/{group_uuid}/add_user/",
+            method="POST",
+            data={"pk": user_pk},
+        )
+
+    def remove_user_from_group(self, group_uuid: str, user_pk: int) -> None:
+        """Idempotently remove an integer user primary key from a group."""
+        self._request(
+            f"/api/v3/core/groups/{group_uuid}/remove_user/",
+            method="POST",
+            data={"pk": user_pk},
+        )
+
+    @staticmethod
+    def _permission_payload(provider_pk: int) -> dict[str, Any]:
+        """Build the fixed provider-object permission mutation payload."""
+        return {
+            "permissions": [LDAP_SEARCH_PERMISSION],
+            "model": LDAP_PROVIDER_MODEL,
+            "object_pk": provider_pk,
+        }
+
+    def assign_provider_search_permission(self, role_uuid: str, provider_pk: int) -> None:
+        """Assign and then strictly verify the provider-scoped search permission."""
+        self.get_provider(provider_pk)
+        self._request(
+            f"/api/v3/rbac/permissions/assigned_by_roles/{role_uuid}/assign/",
+            method="POST",
+            data=self._permission_payload(provider_pk),
+        )
+        self.verify_provider_search_permission(role_uuid, provider_pk)
+
+    @staticmethod
+    def _parse_permission(record: dict[str, Any]) -> AssignedPermission:
+        """Parse one assigned permission record."""
+        try:
+            object_pk = record.get("object_pk")
+            return AssignedPermission(
+                codename=str(record["codename"]),
+                model=str(record["model"]),
+                app_label=str(record["app_label"]),
+                object_pk=str(object_pk) if object_pk is not None else None,
+            )
+        except (KeyError, TypeError) as error:
+            raise AuthentikAuthorizationError("Malformed assigned permission response") from error
+
+    def verify_provider_search_permission(self, role_uuid: str, provider_pk: int) -> None:
+        """Require the expected object grant and reject any matching global grant."""
+        endpoint = (
+            "/api/v3/rbac/permissions/assigned_by_roles/"
+            f"?model={LDAP_PROVIDER_MODEL}&object_pk={provider_pk}"
+        )
+        rows = self._request_all(endpoint)
+        role_rows = [row for row in rows if str(row.get("role_pk")) == role_uuid]
+        global_permissions = [
+            self._parse_permission(permission)
+            for row in role_rows
+            for permission in row.get("model_permissions", [])
+        ]
+        if any(
+            permission.codename == "search_full_directory"
+            and permission.model == "ldapprovider"
+            and permission.app_label == LDAP_PROVIDER_APP_LABEL
+            for permission in global_permissions
+        ):
+            raise AuthentikAuthorizationError(
+                "LDAP search permission was assigned globally instead of to the provider"
+            )
+
+        object_permissions = [
+            self._parse_permission(permission)
+            for row in role_rows
+            for permission in row.get("object_permissions", [])
+        ]
+        if not any(
+            permission.codename == "search_full_directory"
+            and permission.model == "ldapprovider"
+            and permission.app_label == LDAP_PROVIDER_APP_LABEL
+            and permission.object_pk == str(provider_pk)
+            for permission in object_permissions
+        ):
+            raise AuthentikAuthorizationError(
+                f"LDAP search permission is not scoped to provider {provider_pk}"
+            )
+
     def get_token_key(self, token_identifier: str) -> str:
         """Retrieve the actual API token key string for an outpost token.
 
@@ -582,23 +742,6 @@ class AuthentikApiClient:
         if not key:
             raise AuthentikApiError(f"Could not retrieve token secret key for {token_identifier}")
         return key
-
-    def get_group_by_name(self, name: str) -> Optional[str]:
-        """Search for an Authentik User Group by its name.
-
-        Args:
-            name: The name of the group to search for.
-
-        Returns:
-            The UUID PK of the group if found, otherwise None.
-        """
-        # Encode name parameter
-        encoded_name = quote(name)
-        res = self._request(f"/api/v3/core/groups/?name={encoded_name}")
-        results = res.get("results", [])
-        if results:
-            return results[0].get("pk")
-        return None
 
     def create_service_account(self, name: str) -> Tuple[int, str]:
         """Create a dedicated service account user.
@@ -674,16 +817,6 @@ class AuthentikApiClient:
         payload = {"password": password}
         self._request(f"/api/v3/core/users/{user_pk}/set_password/", method="POST", data=payload)
 
-    def add_user_to_group(self, group_uuid: str, user_pk: int) -> None:
-        """Add a user/service account to a search group.
-
-        Args:
-            group_uuid: The UUID of the group.
-            user_pk: The ID of the user to add.
-        """
-        payload = {"pk": user_pk}
-        self._request(f"/api/v3/core/groups/{group_uuid}/add_user/", method="POST", data=payload)
-
     def delete_user(self, user_pk: int) -> None:
         """Delete a user/service account by ID.
 
@@ -693,12 +826,8 @@ class AuthentikApiClient:
         logger.info("Deleting user ID: %s", user_pk)
         try:
             self._request(f"/api/v3/core/users/{user_pk}/", method="DELETE")
-        except AuthentikApiError as e:
-            # If already deleted, ignore
-            if e.status_code == 404:
-                logger.warning("User ID %s already deleted.", user_pk)
-            else:
-                raise e
+        except AuthentikNotFoundError:
+            logger.warning("User ID %s already deleted.", user_pk)
 
     def check_outpost_exists(self, outpost_uuid: str) -> bool:
         """Check if an outpost exists by its UUID.

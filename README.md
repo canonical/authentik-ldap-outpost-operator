@@ -20,7 +20,8 @@ This operator incorporates advanced directory management practices that signific
 
 ### 1. Dynamic, Relation-Driven Service Accounts
 Rather than sharing a single global administrator credential across all client applications (which represents a critical security risk), this charm implements isolated credentials:
-* **Zero Credential Sharing**: On a `relation-joined` event with a consuming client (such as Nextcloud or GitLab), the charm leader dynamically calls the Authentik REST API to provision a unique, isolated Service Account user (`ldap-client-<charm-name>-<relation-id>`) with a strong, randomly generated password.
+* **Zero Credential Sharing**: On a `relation-joined` event with a consuming client (such as Nextcloud or GitLab), the charm leader dynamically calls the Authentik REST API to provision a unique, isolated Service Account user with a strong, randomly generated password. The bind username folds in the requirer-requested `user` for traceability while staying globally unique via the deployment identity and relation id (`ldap-client-<user>-<deployment-identity>-<relation-id>`); consumers authenticate with the returned `bind_dn`.
+* **Requested user/group**: The `ldap` interface lets a requirer request a bind `user` and `group`. The outpost reflects `user` in the bind username (above) and, for `group`, adds the bind user to an **existing** Authentik group of that name (adopt-only — groups are never auto-created). Full-directory search is granted through a provider-scoped RBAC role, not group membership. Note that Authentik always serves binds under `ou=users,<base_dn>`, so the requested `group` is not used as the bind DN's organizational unit.
 * **Access Revocation**: When the relation is severed (`relation-broken`), the corresponding Service Account user is automatically deleted from the Authentik database, preventing credential rot and keeping the directory clean.
 * **Resource Efficiency**: Only **one** Kubernetes pod for the Outpost is spawned in the Juju model, serving all integrated downstream LDAP clients concurrently via their respective secure accounts.
 
@@ -47,11 +48,23 @@ The following configurations can be declared to govern the global characteristic
 | Juju Config Key | Type | Default | Description |
 |:---|:---|:---|:---|
 | `base_dn` | string | `dc=ldap,dc=goauthentik,dc=io` | The Base DN under which directory objects are made accessible. |
-| `search_group` | string | `authentik Admingroup` | The name or UUID of the group whose members can perform directory queries. |
-| `search_mode` | string | `direct` | Access mode for searches: `direct` (live server queries) or `cached` (in-memory caching). |
-| `bind_mode` | string | `direct` | Access mode for binds: `direct` or `cached`. |
+| `search_mode` | string | `cached` | Access mode for searches: `cached` (local cache) or `direct` (live server queries). |
+| `bind_mode` | string | `cached` | Access mode for binds: `cached` (local cache) or `direct` (live server validation). |
 | `mfa_support` | boolean | `false` | Enable/disable multi-factor authentication support via password-appending. |
 | `ingress_domain` | string | `""` | The custom domain name to use for the external ingress route (e.g., `outpost.example.com`). If unset, the route rule defaults to `HostSNI(*)` to match all incoming TLS traffic on port 636. |
+
+### Cached modes and upgrades
+
+The default `cached` modes reduce dependence on the Authentik server, but the outpost cache must warm up after startup or before first use. Entries that have not synchronized yet can be unavailable, and cached searches can return stale users, attributes, or group memberships until the next synchronization.
+
+Cached binds also trade immediate security-state consistency for availability. A password change might not take effect immediately: an old password can remain usable and a new password can fail until cached data refreshes. Likewise, disabling a user or revoking their Authentik sessions might not immediately prevent LDAP binds. Use `direct` modes when every request must reflect the live Authentik state; direct operation requires the Authentik server to be reachable.
+
+Upgrades change applications that relied on the previous implicit `direct` defaults. To preserve live behavior, explicitly pin both modes **before** refreshing the charm:
+
+```bash
+juju config authentik-ldap-outpost search_mode=direct bind_mode=direct
+juju refresh authentik-ldap-outpost
+```
 
 
 ---

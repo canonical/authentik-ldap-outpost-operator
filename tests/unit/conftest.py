@@ -3,6 +3,7 @@
 
 """Unit test fixtures and shared utilities."""
 
+import hashlib
 import sys
 import types
 from typing import Any, Mapping, Optional, Sequence
@@ -11,6 +12,10 @@ import ops
 import pytest
 from ops import testing
 from ops.framework import EventBase, EventSource, Object, ObjectEvents
+
+MODEL_UUID = "12345678-1234-4234-8234-123456789abc"
+APP_NAME = "authentik-ldap-outpost"
+DEPLOYMENT_IDENTITY = f"{APP_NAME}-{hashlib.sha256(MODEL_UUID.encode()).hexdigest()[:12]}"
 
 # Create mock module for charms.observability_libs.v0.kubernetes_compute_resources_patch
 module_name = "charms.observability_libs.v0.kubernetes_compute_resources_patch"
@@ -92,8 +97,7 @@ def create_state(
     peer_data: Optional[Mapping[str, str]] = None,
 ) -> testing.State:
     """Create a Scenario State with sensible defaults."""
-    if secrets is None:
-        secrets = []
+    secrets = list(secrets or [])
     if relations is None:
         relations = []
     else:
@@ -107,7 +111,16 @@ def create_state(
     peer_rel_exists = any(r.endpoint == "authentik-ldap-peers" for r in relations)
     if not peer_rel_exists:
         if peer_data is None:
-            peer_data = {"outpost_token": "mock-token-123"}
+            outpost_secret = testing.Secret(
+                {"token": "mock-token-123"},
+                id="secret:outpost-token",
+                owner="app",
+                label="authentik-ldap-outpost-token",
+            )
+            secrets.append(outpost_secret)
+            peer_data = {
+                "outpost_token_secret_id": outpost_secret.id,
+            }
         peer_rel = testing.PeerRelation(
             endpoint="authentik-ldap-peers",
             interface="authentik_ldap_peers",
@@ -117,6 +130,7 @@ def create_state(
 
     return testing.State(
         leader=leader,
+        model=testing.Model(name="ldap-model", uuid=MODEL_UUID),
         secrets=set(secrets),
         relations=set(relations),
         containers=set(containers),
@@ -179,13 +193,18 @@ def server_info_relation() -> testing.Relation:
 @pytest.fixture(autouse=True)
 def mocked_api_client(mocker: Any) -> Any:
     """Fixture to mock AuthentikApiClient to avoid real HTTP requests."""
+    from api_client import AuthentikRole
+
     mock_class = mocker.patch("charm.AuthentikApiClient", autospec=True)
     mock_instance = mock_class.return_value
     mock_instance.get_or_create_provider.return_value = 1
     mock_instance.get_or_create_outpost.return_value = ("outpost-uuid", "token-ident")
     mock_instance.get_token_key.return_value = "mock-token-123"
-    mock_instance.get_group_by_name.return_value = "group-uuid"
     mock_instance.create_service_account.return_value = (42, "ldap-client-relation-1")
     mock_instance.create_ldap_bind_user.return_value = (42, "ldap-client-relation-1")
     mock_instance.check_outpost_exists.return_value = True
+    # RBAC search-authorization defaults (idempotent, verified by the client).
+    mock_instance.get_or_create_role.return_value = AuthentikRole(pk="role-uuid", name="role")
+    mock_instance.assign_provider_search_permission.return_value = None
+    mock_instance.add_user_to_role.return_value = None
     return mock_class
