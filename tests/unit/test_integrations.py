@@ -26,7 +26,6 @@ class TestServerInfoIntegration:
         mock_requirer.is_ready.return_value = True
         mock_requirer.get_authentik_host.return_value = "http://authentik:9000"
         mock_requirer.get_authentik_token.return_value = "token123"
-        mock_requirer.get_bootstrap_password.return_value = "password123"
 
         env = integration.to_env_vars()
         assert env["AUTHENTIK_HOST"] == "http://authentik:9000"

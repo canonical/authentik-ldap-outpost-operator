@@ -13,6 +13,7 @@ This specification defines the declarative Juju charm configuration (`charmcraft
   - `ldap` (provide LDAP connections to consuming apps)
   - `ingress` & `ldaps-ingress` (expose LDAP/S outside the K8s cluster)
   - `authentik-ldap-peers` (replicate outpost unit states)
+- **Cached LDAP Availability**: Defaults search and bind operations to Authentik's cache for outage tolerance while retaining explicit `direct` modes for live consistency. Cached data requires warm-up and can delay search freshness, password changes, and revocations, so operators receive migration and security guidance.
 ## Requirements
 ### Requirement: Container name matches constant
 `charmcraft.yaml` SHALL declare a container named `authentik-ldap` matching `WORKLOAD_CONTAINER` in `src/constants.py`. The container SHALL NOT set `gid` or `uid` fields.
@@ -72,10 +73,24 @@ The charm `charmcraft.yaml` MUST declare a boolean configuration option named `e
 - **WHEN** the charm metadata is parsed
 - **THEN** the configuration contains `expose_ldap_ingress` of type `boolean` with a default of `false`
 
-### Requirement: Declare search group configuration option with correct default
-The charm `charmcraft.yaml` MUST declare a string configuration option named `search_group` with a default value of `"authentik Admins"`.
+### Requirement: Declare LDAP provider modes with cached defaults
+The charm `charmcraft.yaml` MUST declare string configuration options named `search_mode` and `bind_mode`. Both options MUST default to `cached`, and both MUST continue to support explicit `direct` values.
 
-#### Scenario: Configuration option is declared with correct default
-- **WHEN** the charm metadata is parsed
-- **THEN** the configuration contains `search_group` of type `string` with a default of `"authentik Admins"`
+#### Scenario: Unset provider modes use cached behavior
+- **WHEN** an operator deploys or upgrades the charm without explicitly configuring `search_mode` or `bind_mode`
+- **THEN** the effective value of each option is `cached`
+- **THEN** the charm sends `cached` for both modes when reconciling the Authentik LDAP provider
+
+#### Scenario: Operator selects live provider modes
+- **WHEN** an operator explicitly configures `search_mode=direct` and `bind_mode=direct`
+- **THEN** the charm accepts the configuration
+- **THEN** the charm sends `direct` for both modes when reconciling the Authentik LDAP provider
+
+### Requirement: Document cached-mode migration and security behavior
+The LDAP charm documentation MUST explain that cached operation requires cache warm-up, search results can remain stale until synchronization, and password changes and session revocations can take effect only after cached bind state is refreshed. It MUST instruct operators who require live consistency to run `juju config authentik-ldap-outpost search_mode=direct bind_mode=direct` before refreshing the charm.
+
+#### Scenario: Operator assesses an upgrade
+- **WHEN** an operator reviews the LDAP charm documentation before upgrading from a release whose implicit defaults were `direct`
+- **THEN** the operator can identify the freshness, warm-up, password-change, and session-revocation implications of cached operation
+- **THEN** the operator can find the command to explicitly set both modes to `direct` before refreshing the charm
 
