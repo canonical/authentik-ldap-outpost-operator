@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.2.0](https://github.com/canonical/authentik-ldap-outpost-operator/compare/v1.1.0...v1.2.0) (2026-07-23)
+
+
+### Features
+
+* adopt LDAP RBAC, deployment-unique resources, and honor requirer identity ([38e02ea](https://github.com/canonical/authentik-ldap-outpost-operator/commit/38e02eaae0f22bdb7d8cd513955ffd9e5f929e62))
+
 ## [1.1.0](https://github.com/canonical/authentik-ldap-outpost-operator/compare/v1.0.0...v1.1.0) (2026-07-21)
 
 
