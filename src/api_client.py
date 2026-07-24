@@ -229,61 +229,84 @@ class AuthentikApiClient:
         return None
 
     def get_or_create_ldap_bind_flow(self) -> str:
-        """Get or create the custom non-interactive LDAP Bind flow.
+        """Get or create the non-interactive LDAP Bind flow and ensure its stages.
+
+        Race-safe and idempotent:
+
+        * The three default authentication stages are resolved FIRST. During first
+          boot Authentik applies its default stages asynchronously, so when they are
+          not present yet this raises before creating anything, letting the caller
+          retry instead of leaving a stage-less flow behind.
+        * The flow is then get-or-created by slug and its stage bindings are
+          reconciled (only the missing ones are created). This repairs a flow that a
+          previous run created without bindings, which otherwise leaves every LDAP
+          bind failing (the flow authenticates nobody, so ``/core/users/me`` is
+          unauthenticated).
 
         Returns:
             The UUID PK of the flow.
+
+        Raises:
+            AuthentikApiError: If the required default stages are not yet available
+                or the flow cannot be created.
         """
-        # Try to retrieve the flow directly by slug to avoid paginated listing
+        # Required stages and their binding order within the bind flow.
+        required_orders = {
+            "default-authentication-identification": 10,
+            "default-authentication-password": 20,
+            "default-authentication-login": 100,
+        }
+
+        # Resolve stages up front; if Authentik has not applied its default
+        # blueprints yet, raise WITHOUT creating a half-built flow so the reconcile
+        # retries and self-heals once the stages exist.
+        stages = self._request_all("/api/v3/stages/all/")
+        stage_pks = {name: self._find_stage(stages, name) for name in required_orders}
+        missing = [name for name, pk in stage_pks.items() if not pk]
+        if missing:
+            raise AuthentikApiError(
+                f"Authentik default authentication stages not ready yet: {missing}"
+            )
+
+        # Get-or-create the flow by slug.
+        flow_pk = None
         try:
             flow = self._request("/api/v3/flows/instances/default-ldap-bind-flow/")
-            if flow_pk := flow.get("pk"):
-                return flow_pk
+            flow_pk = flow.get("pk")
         except AuthentikNotFoundError:
             pass
 
-        logger.info("LDAP Bind Flow not found. Creating a new one.")
-        flow_data = {
-            "name": "LDAP Bind Flow",
-            "slug": "default-ldap-bind-flow",
-            "title": "LDAP Bind Flow",
-            "designation": "authentication",
-            "compatibility_mode": False,
-            "layout": "stacked",
-            "denied_action": "message_continue",
-        }
-        res = self._request("/api/v3/flows/instances/", method="POST", data=flow_data)
-        flow_pk = res.get("pk")
         if not flow_pk:
-            raise AuthentikApiError("Failed to create default-ldap-bind-flow")
+            logger.info("LDAP Bind Flow not found. Creating a new one.")
+            flow_data = {
+                "name": "LDAP Bind Flow",
+                "slug": "default-ldap-bind-flow",
+                "title": "LDAP Bind Flow",
+                "designation": "authentication",
+                "compatibility_mode": False,
+                "layout": "stacked",
+                "denied_action": "message_continue",
+            }
+            res = self._request("/api/v3/flows/instances/", method="POST", data=flow_data)
+            flow_pk = res.get("pk")
+            if not flow_pk:
+                raise AuthentikApiError("Failed to create default-ldap-bind-flow")
 
-        stages = self._request_all("/api/v3/stages/all/")
-
-        ident_stage = self._find_stage(stages, "default-authentication-identification")
-        pass_stage = self._find_stage(stages, "default-authentication-password")
-        login_stage = self._find_stage(stages, "default-authentication-login")
-
-        if not ident_stage or not pass_stage or not login_stage:
-            raise AuthentikApiError(
-                f"Could not find all required stages for LDAP Bind Flow: "
-                f"ident={ident_stage}, pass={pass_stage}, login={login_stage}"
+        # Reconcile stage bindings idempotently: only create the ones not already
+        # bound. Repairs a pre-existing flow that was created without bindings.
+        existing = self._request_all(f"/api/v3/flows/bindings/?target={flow_pk}")
+        bound_stage_pks = {binding.get("stage") for binding in existing}
+        for name, order in required_orders.items():
+            stage_pk = stage_pks[name]
+            if stage_pk in bound_stage_pks:
+                continue
+            self._request(
+                "/api/v3/flows/bindings/",
+                method="POST",
+                data={"target": flow_pk, "stage": stage_pk, "order": order},
             )
 
-        bindings = [
-            {"stage": ident_stage, "order": 10},
-            {"stage": pass_stage, "order": 20},
-            {"stage": login_stage, "order": 100},
-        ]
-
-        for binding in bindings:
-            binding_data = {
-                "target": flow_pk,
-                "stage": binding["stage"],
-                "order": binding["order"],
-            }
-            self._request("/api/v3/flows/bindings/", method="POST", data=binding_data)
-
-        logger.info("Successfully created LDAP Bind Flow and bound its stages.")
+        logger.info("Ensured LDAP Bind Flow and its stage bindings.")
         return flow_pk
 
     def get_or_create_provider(

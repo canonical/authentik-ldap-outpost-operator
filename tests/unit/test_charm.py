@@ -3,6 +3,7 @@
 
 """Unit tests for the charm lifecycle and event handlers."""
 
+import dataclasses
 import json
 from typing import Any
 
@@ -1231,6 +1232,84 @@ class TestSearchAuthorization:
         mock_client.assign_provider_search_permission.assert_not_called()
         # Role membership is still reconciled idempotently.
         mock_client.add_user_to_role.assert_any_call("role-uuid", 42)
+
+    def _membership_state(self, server_info_relation: testing.Relation) -> Any:
+        """Build a config-changed-ready state with one tracked bind user."""
+        ldap_relation = testing.Relation(
+            endpoint="ldap", interface="ldap", remote_app_name="nextcloud"
+        )
+        peer_relation = testing.PeerRelation(
+            endpoint="authentik-ldap-peers",
+            interface="authentik_ldap_peers",
+            local_app_data={
+                "provider_pk": "1",
+                "outpost_uuid": "outpost-uuid",
+                "outpost_token_secret_id": "secret:outpost",
+                "last_base_dn": "dc=ldap,dc=goauthentik,dc=io",
+                "last_search_mode": "cached",
+                "last_bind_mode": "cached",
+                "last_mfa_support": "False",
+                f"client_{ldap_relation.id}": json.dumps({"user_id": "42", "username": "bind"}),
+            },
+        )
+        token_secret = testing.Secret(
+            {"token": "mock-token-123"},
+            id="secret:outpost",
+            owner="app",
+            label=f"authentik-ldap-outpost-token-{DEPLOYMENT_IDENTITY}",
+        )
+        return create_state(
+            can_connect=True,
+            relations=[server_info_relation, ldap_relation, peer_relation],
+            secrets=self._bootstrap_secrets() + [token_secret],
+            config={"base_dn": "dc=changed,dc=io"},
+        )
+
+    def test_unchanged_membership_skips_add_user_to_role(
+        self,
+        context: testing.Context,
+        server_info_relation: testing.Relation,
+        mocked_api_client: Any,
+    ) -> None:
+        """A second reconcile with unchanged membership makes no add_user_to_role call."""
+        mock_client = mocked_api_client.return_value
+        state_in = self._membership_state(server_info_relation)
+
+        # First reconcile applies and caches the (user, role) membership.
+        state_mid = context.run(context.on.config_changed(), state_in)
+        mock_client.add_user_to_role.assert_any_call("role-uuid", 42)
+
+        # A further config change still runs search authorization, but the cached
+        # membership for the unchanged role must skip the redundant API call.
+        mock_client.add_user_to_role.reset_mock()
+        state_next = dataclasses.replace(state_mid, config={"base_dn": "dc=changed-again,dc=io"})
+        context.run(context.on.config_changed(), state_next)
+        mock_client.add_user_to_role.assert_not_called()
+
+    def test_changed_role_reapplies_membership(
+        self,
+        context: testing.Context,
+        server_info_relation: testing.Relation,
+        mocked_api_client: Any,
+    ) -> None:
+        """A changed role UUID invalidates the cache and re-applies membership."""
+        from api_client import AuthentikRole
+
+        mock_client = mocked_api_client.return_value
+        state_in = self._membership_state(server_info_relation)
+
+        state_mid = context.run(context.on.config_changed(), state_in)
+        mock_client.add_user_to_role.assert_any_call("role-uuid", 42)
+
+        # The role is recreated with a new UUID: the prior grant is gone, so the
+        # cached membership is invalidated and the user is re-added to the new role.
+        mock_client.add_user_to_role.reset_mock()
+        mock_client.get_or_create_role.return_value = AuthentikRole(
+            pk="new-role-uuid", name="role"
+        )
+        state_next = dataclasses.replace(state_mid, config={"base_dn": "dc=changed-again,dc=io"})
+        context.run(context.on.config_changed(), state_next)
+        mock_client.add_user_to_role.assert_any_call("new-role-uuid", 42)
 
 
 class TestRequirerIdentity:

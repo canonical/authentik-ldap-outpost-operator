@@ -226,47 +226,84 @@ class TestAuthentikApiClient:
 
         mock_request.assert_called_once()
 
+    @patch.object(AuthentikApiClient, "_request_all")
     @patch.object(AuthentikApiClient, "_request")
-    def test_get_or_create_ldap_bind_flow_direct_slug_success(
-        self, mock_request: MagicMock, client: AuthentikApiClient
+    def test_get_or_create_ldap_bind_flow_existing_all_bound_is_noop(
+        self, mock_request: MagicMock, mock_request_all: MagicMock, client: AuthentikApiClient
     ) -> None:
-        """Test get_or_create_ldap_bind_flow succeeds on direct slug check."""
+        """An existing flow with all stage bindings present creates nothing."""
+        mock_request_all.side_effect = [
+            [
+                {"name": "default-authentication-identification", "pk": "ident"},
+                {"name": "default-authentication-password", "pk": "pass"},
+                {"name": "default-authentication-login", "pk": "login"},
+            ],
+            [{"stage": "ident"}, {"stage": "pass"}, {"stage": "login"}],
+        ]
         mock_request.return_value = {"pk": "bind-flow-uuid"}
 
         res = client.get_or_create_ldap_bind_flow()
 
         assert res == "bind-flow-uuid"
+        # Only the flow slug GET is issued; no flow or binding is created.
         mock_request.assert_called_once_with("/api/v3/flows/instances/default-ldap-bind-flow/")
+
+    @patch.object(AuthentikApiClient, "_request_all")
+    @patch.object(AuthentikApiClient, "_request")
+    def test_get_or_create_ldap_bind_flow_repairs_missing_bindings(
+        self, mock_request: MagicMock, mock_request_all: MagicMock, client: AuthentikApiClient
+    ) -> None:
+        """An existing flow left without bindings is repaired (idempotent)."""
+        mock_request_all.side_effect = [
+            [
+                {"name": "default-authentication-identification", "pk": "ident"},
+                {"name": "default-authentication-password", "pk": "pass"},
+                {"name": "default-authentication-login", "pk": "login"},
+            ],
+            [],  # flow exists but has no stage bindings
+        ]
+        mock_request.side_effect = [
+            {"pk": "bind-flow-uuid"},  # flow slug GET
+            {},  # POST binding ident
+            {},  # POST binding pass
+            {},  # POST binding login
+        ]
+
+        res = client.get_or_create_ldap_bind_flow()
+
+        assert res == "bind-flow-uuid"
+        for stage, order in [("ident", 10), ("pass", 20), ("login", 100)]:
+            mock_request.assert_any_call(
+                "/api/v3/flows/bindings/",
+                method="POST",
+                data={"target": "bind-flow-uuid", "stage": stage, "order": order},
+            )
 
     @patch.object(AuthentikApiClient, "_request_all")
     @patch.object(AuthentikApiClient, "_request")
     def test_get_or_create_ldap_bind_flow_creates_when_missing(
         self, mock_request: MagicMock, mock_request_all: MagicMock, client: AuthentikApiClient
     ) -> None:
-        """Test get_or_create_ldap_bind_flow creates the flow when direct slug check returns 404."""
-        # 1st request (direct check) -> 404
-        # 2nd request (POST flows/instances) -> created pk
-        # 3rd request (POST flows/bindings) -> bound stage 1
-        # 4th request (POST flows/bindings) -> bound stage 2
-        # 5th request (POST flows/bindings) -> bound stage 3
-        mock_request.side_effect = [
-            AuthentikNotFoundError("Not Found", 404),
-            {"pk": "new-bind-flow-uuid"},
-            {},
-            {},
-            {},
+        """When the flow is absent it is created and all stage bindings are added."""
+        mock_request_all.side_effect = [
+            [
+                {"name": "default-authentication-identification", "pk": "ident"},
+                {"name": "default-authentication-password", "pk": "pass"},
+                {"name": "default-authentication-login", "pk": "login"},
+            ],
+            [],  # no bindings on the freshly created flow
         ]
-
-        mock_request_all.return_value = [
-            {"name": "default-authentication-identification", "pk": "ident-stage-uuid"},
-            {"name": "default-authentication-password", "pk": "pass-stage-uuid"},
-            {"name": "default-authentication-login", "pk": "login-stage-uuid"},
+        mock_request.side_effect = [
+            AuthentikNotFoundError("Not Found", 404),  # flow slug GET
+            {"pk": "new-bind-flow-uuid"},  # POST flow
+            {},  # POST binding ident
+            {},  # POST binding pass
+            {},  # POST binding login
         ]
 
         res = client.get_or_create_ldap_bind_flow()
 
         assert res == "new-bind-flow-uuid"
-        # Verify post flow data
         mock_request.assert_any_call(
             "/api/v3/flows/instances/",
             method="POST",
@@ -280,6 +317,20 @@ class TestAuthentikApiClient:
                 "denied_action": "message_continue",
             },
         )
+
+    @patch.object(AuthentikApiClient, "_request_all")
+    @patch.object(AuthentikApiClient, "_request")
+    def test_get_or_create_ldap_bind_flow_raises_when_stages_absent(
+        self, mock_request: MagicMock, mock_request_all: MagicMock, client: AuthentikApiClient
+    ) -> None:
+        """If the default stages are not applied yet, raise without creating a flow."""
+        mock_request_all.return_value = []  # stages not present yet
+
+        with pytest.raises(AuthentikApiError, match="stages not ready"):
+            client.get_or_create_ldap_bind_flow()
+
+        # No flow or binding is created; the reconcile simply retries later.
+        mock_request.assert_not_called()
 
     @patch.object(AuthentikApiClient, "_request")
     def test_delete_user_ignores_404(
