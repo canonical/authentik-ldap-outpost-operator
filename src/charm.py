@@ -10,6 +10,7 @@ import logging
 import re
 import secrets
 from dataclasses import dataclass
+from functools import cached_property
 from typing import Optional
 
 import ops
@@ -24,7 +25,7 @@ from charms.observability_libs.v0.kubernetes_compute_resources_patch import (
 from charms.prometheus_k8s.v0.prometheus_scrape import MetricsEndpointProvider
 from charms.tempo_coordinator_k8s.v0.tracing import TracingEndpointRequirer
 
-from api_client import AuthentikApiClient, AuthentikNotFoundError
+from api_client import AuthentikApiClient, AuthentikApiError, AuthentikNotFoundError
 from configs import CharmConfig
 from constants import (
     GRAFANA_DASHBOARD_RELATION,
@@ -219,7 +220,6 @@ class AuthentikLdapCharm(ops.CharmBase):
 
     def _apply_group_membership(
         self,
-        client: AuthentikApiClient,
         user_pk: int,
         old_group: Optional[str],
         new_group: Optional[str],
@@ -232,11 +232,11 @@ class AuthentikLdapCharm(ops.CharmBase):
         if (old_group or "") == (new_group or ""):
             return
         if old_group:
-            if old_uuid := client.get_group_by_name(old_group):
-                client.remove_user_from_group(old_uuid, user_pk)
+            if old_uuid := self._api_client.get_group_by_name(old_group):
+                self._api_client.remove_user_from_group(old_uuid, user_pk)
         if new_group:
-            if new_uuid := client.get_group_by_name(new_group):
-                client.add_user_to_group(new_uuid, user_pk)
+            if new_uuid := self._api_client.get_group_by_name(new_group):
+                self._api_client.add_user_to_group(new_uuid, user_pk)
             else:
                 logger.info(
                     "Requested LDAP group '%s' not found on Authentik; skipping membership",
@@ -331,7 +331,7 @@ class AuthentikLdapCharm(ops.CharmBase):
         self._set_peer_data("last_bind_mode", bind_mode or "")
         self._set_peer_data("last_mfa_support", str(mfa_support))
 
-    def _ensure_search_authorization(self, client: AuthentikApiClient, provider_pk: int) -> None:
+    def _ensure_search_authorization(self, provider_pk: int) -> None:
         """Grant full-directory search to all bind users via a provider-scoped role.
 
         Creates (or adopts) a deployment-owned role, assigns the
@@ -340,21 +340,27 @@ class AuthentikLdapCharm(ops.CharmBase):
         user to the role. Role membership is idempotent on Authentik.
 
         Args:
-            client: The AuthentikApiClient instance.
             provider_pk: The primary key of this deployment's LDAP provider.
         """
-        role = client.get_or_create_role(self._search_role_name)
-        client.assign_provider_search_permission(role.pk, provider_pk)
+        prev_role_uuid = self._get_peer_data("search_role_uuid")
+        role = self._api_client.get_or_create_role(self._search_role_name)
+        verified_pk = self._get_peer_data("search_permission_verified")
+        # Re-assign and re-verify only when the provider changed or the role was
+        # recreated (a new UUID means the prior grant is gone); otherwise skip the
+        # redundant assign+verify round-trip on every config change.
+        already_verified = verified_pk == str(provider_pk) and prev_role_uuid == role.pk
+        if not already_verified:
+            self._api_client.assign_provider_search_permission(role.pk, provider_pk)
+            self._set_peer_data("search_permission_verified", str(provider_pk))
         self._set_peer_data("search_role_uuid", role.pk)
 
         for relation in self.model.relations.get(LDAP_RELATION, []):
             creds = self._get_relation_credentials(relation.id)
             if user_id := creds.get("user_id"):
-                client.add_user_to_role(role.pk, int(user_id))
+                self._api_client.add_user_to_role(role.pk, int(user_id))
 
     def _verify_and_update_existing_resources(
         self,
-        client: AuthentikApiClient,
         provider_pk_peer: Optional[str],
         outpost_uuid_peer: Optional[str],
         outpost_token_peer: Optional[str],
@@ -367,7 +373,6 @@ class AuthentikLdapCharm(ops.CharmBase):
         """Verify existing outpost resources and reconcile configuration.
 
         Args:
-            client: The AuthentikApiClient instance.
             provider_pk_peer: Cached provider primary key.
             outpost_uuid_peer: Cached outpost UUID.
             outpost_token_peer: Cached outpost token.
@@ -385,12 +390,12 @@ class AuthentikLdapCharm(ops.CharmBase):
             return False
 
         try:
-            client.check_outpost_exists(outpost_uuid_peer)
+            self._api_client.check_outpost_exists(outpost_uuid_peer)
             provider_pk = int(provider_pk_peer)
 
             if not config_unchanged:
                 logger.info("Configuration changed. Updating existing LDAP Provider config.")
-                client.update_provider_config(
+                self._api_client.update_provider_config(
                     provider_pk=provider_pk,
                     base_dn=base_dn or "",
                     search_mode=search_mode,
@@ -398,7 +403,7 @@ class AuthentikLdapCharm(ops.CharmBase):
                     mfa_support=mfa_support,
                 )
                 self._set_peer_config_metadata(base_dn, search_mode, bind_mode, mfa_support)
-                self._ensure_search_authorization(client, provider_pk)
+                self._ensure_search_authorization(provider_pk)
             return True
         except AuthentikNotFoundError:
             logger.info("Stored Authentik outpost no longer exists; reprovisioning")
@@ -406,7 +411,6 @@ class AuthentikLdapCharm(ops.CharmBase):
 
     def _provision_fresh_resources(
         self,
-        client: AuthentikApiClient,
         base_dn: Optional[str],
         search_mode: str,
         bind_mode: str,
@@ -415,13 +419,12 @@ class AuthentikLdapCharm(ops.CharmBase):
         """Create and sync fresh Provider, Application, and Outpost resources.
 
         Args:
-            client: The AuthentikApiClient instance.
             base_dn: The Base DN of the directory.
             search_mode: The directory search mode.
             bind_mode: The bind access mode.
             mfa_support: Whether MFA is enabled.
         """
-        provider_pk = client.get_or_create_provider(
+        provider_pk = self._api_client.get_or_create_provider(
             name=self._provider_name,
             base_dn=base_dn or "",
             search_mode=search_mode,
@@ -429,18 +432,18 @@ class AuthentikLdapCharm(ops.CharmBase):
             mfa_support=mfa_support,
         )
 
-        client.get_or_create_application(
+        self._api_client.get_or_create_application(
             name=self._application_name,
             slug=self._application_name,
             provider_pk=provider_pk,
         )
 
-        outpost_pk, token_identifier = client.get_or_create_outpost(
+        outpost_pk, token_identifier = self._api_client.get_or_create_outpost(
             name=self._outpost_name,
             provider_pk=provider_pk,
         )
 
-        outpost_token = client.get_token_key(token_identifier)
+        outpost_token = self._api_client.get_token_key(token_identifier)
 
         # Store identifiers in peer relation and keep the token in an application secret.
         self._set_peer_data("provider_pk", str(provider_pk))
@@ -449,7 +452,7 @@ class AuthentikLdapCharm(ops.CharmBase):
         self._set_peer_config_metadata(base_dn, search_mode, bind_mode, mfa_support)
 
         # Grant full-directory search to bind users through a provider-scoped role.
-        self._ensure_search_authorization(client, provider_pk)
+        self._ensure_search_authorization(provider_pk)
 
         logger.info(
             "Successfully provisioned Authentik resources: Provider ID %s, Outpost UUID %s",
@@ -457,14 +460,21 @@ class AuthentikLdapCharm(ops.CharmBase):
             outpost_pk,
         )
 
+    @cached_property
+    def _api_client(self) -> Optional[AuthentikApiClient]:
+        """Build the Authentik API client once per charm instance (per event).
+
+        Returns:
+            An API client when server info is ready, otherwise None.
+        """
+        info = self.server_info.get_info()
+        if not info:
+            return None
+        return AuthentikApiClient(info.host, info.api_token)
+
     def _provision_authentik_resources(self) -> None:
         """Provision the Upstream Provider and Outpost on Authentik."""
         if not self.unit.is_leader():
-            return
-
-        info = self.server_info.get_info()
-        if not info:
-            logger.info("Server info not ready yet; skipping provisioning")
             return
 
         base_dn = self.model.config.get("base_dn")
@@ -488,10 +498,7 @@ class AuthentikLdapCharm(ops.CharmBase):
             and last_mfa_support == str(mfa_support)
         )
 
-        client = AuthentikApiClient(info.host, info.api_token)
-
         if self._verify_and_update_existing_resources(
-            client=client,
             provider_pk_peer=provider_pk_peer,
             outpost_uuid_peer=outpost_uuid_peer,
             outpost_token_peer=outpost_token_peer,
@@ -504,7 +511,6 @@ class AuthentikLdapCharm(ops.CharmBase):
             return
 
         self._provision_fresh_resources(
-            client=client,
             base_dn=base_dn,
             search_mode=search_mode,
             bind_mode=bind_mode,
@@ -545,12 +551,12 @@ class AuthentikLdapCharm(ops.CharmBase):
         """Remove peer tracking for a relation."""
         self._remove_peer_data(f"client_{relation_id}")
 
-    def _delete_orphaned_relation(self, client: AuthentikApiClient, relation_id: int) -> None:
+    def _delete_orphaned_relation(self, relation_id: int) -> None:
         """Delete an orphaned relation's service account and then clear peer data."""
         creds = self._get_relation_credentials(relation_id)
         if user_id := creds.get("user_id"):
             try:
-                client.delete_user(int(user_id))
+                self._api_client.delete_user(int(user_id))
                 logger.info(
                     "Successfully deleted Authentik service account user ID %s for relation %s",
                     user_id,
@@ -574,13 +580,8 @@ class AuthentikLdapCharm(ops.CharmBase):
         if not orphaned_ids:
             return
 
-        info = self.server_info.get_info()
-        if not info:
-            return
-
-        client = AuthentikApiClient(info.host, info.api_token)
         for relation_id in orphaned_ids:
-            self._delete_orphaned_relation(client, relation_id)
+            self._delete_orphaned_relation(relation_id)
 
     def _on_ldap_relation_broken(self, event: ops.RelationBrokenEvent) -> None:
         """Handle the relation broken event for LDAP consumers."""
@@ -607,15 +608,16 @@ class AuthentikLdapCharm(ops.CharmBase):
             return
 
         can_plan = True
-        for f in [
+        for step in [
             self._ensure_traefik_route,
             self._ensure_authentik_resources,
             self._ensure_ldap_provider,
         ]:
             try:
-                can_plan = can_plan and f()
+                can_plan = can_plan and step()
             except CharmError as e:
-                logger.exception("Error in %s: %s", f.__name__, e)
+                can_plan = False
+                logger.exception("Error in %s: %s", step.__name__, e)
 
         if not can_plan:
             return
@@ -663,7 +665,7 @@ class AuthentikLdapCharm(ops.CharmBase):
         Returns:
             bool: True if provisioning succeeded and we have the token.
         """
-        if self.unit.is_leader():
+        if self.unit.is_leader() and self._api_client is not None:
             self._provision_authentik_resources()
 
         return bool(self._get_outpost_token())
@@ -732,14 +734,16 @@ class AuthentikLdapCharm(ops.CharmBase):
         Returns:
             bool: True if the provider is fully configured.
         """
-        if not self.server_info.is_ready():
+        if not self.server_info.is_ready() or self._api_client is None:
             return False
 
         # Clean up any orphaned relations
         if self.unit.is_leader():
             try:
                 self._cleanup_orphaned_relations()
-            except Exception as e:
+            except AuthentikApiError as e:
+                # Retain peer-data tracking on a transient failure so the next
+                # reconcile retries; let programming errors propagate.
                 logger.error("Failed to clean up orphaned relations: %s", e)
 
         relations = self.model.relations.get(LDAP_RELATION, [])
@@ -754,11 +758,8 @@ class AuthentikLdapCharm(ops.CharmBase):
 
     def _rotate_bind_password(self, user_pk: int) -> str:
         """Rotate and return the password for an existing LDAP bind user."""
-        info = self.server_info.get_info()
-        if not info:
-            raise RuntimeError("Cannot rotate bind password without Authentik server info")
         password = secrets.token_urlsafe(16)
-        AuthentikApiClient(info.host, info.api_token).set_user_password(user_pk, password)
+        self._api_client.set_user_password(user_pk, password)
         return password
 
     def _provision_service_account(
@@ -768,28 +769,24 @@ class AuthentikLdapCharm(ops.CharmBase):
         requested_group: Optional[str] = None,
     ) -> str:
         """Provision an Authentik user account for an LDAP bind relation."""
-        info = self.server_info.get_info()
-        if not info:
-            raise RuntimeError("Cannot provision bind user without Authentik server info")
-
-        client = AuthentikApiClient(info.host, info.api_token)
-        user_pk, username = client.create_ldap_bind_user(
+        user_pk, username = self._api_client.create_ldap_bind_user(
             self._bind_user_name(relation_id, requested_user)
         )
 
         password = secrets.token_urlsafe(16)
-        client.set_user_password(user_pk, password)
+        self._api_client.set_user_password(user_pk, password)
 
         # Grant full-directory search by adding the user to the provider-scoped role.
         role_uuid = self._get_peer_data("search_role_uuid")
         provider_pk_peer = self._get_peer_data("provider_pk")
         if not role_uuid and provider_pk_peer:
-            role = client.get_or_create_role(self._search_role_name)
-            client.assign_provider_search_permission(role.pk, int(provider_pk_peer))
+            role = self._api_client.get_or_create_role(self._search_role_name)
+            self._api_client.assign_provider_search_permission(role.pk, int(provider_pk_peer))
             role_uuid = role.pk
             self._set_peer_data("search_role_uuid", role_uuid)
+            self._set_peer_data("search_permission_verified", provider_pk_peer)
         if role_uuid:
-            client.add_user_to_role(role_uuid, user_pk)
+            self._api_client.add_user_to_role(role_uuid, user_pk)
         else:
             logger.warning(
                 "Search role is not ready; bind user %s cannot search until provisioning completes",
@@ -797,7 +794,7 @@ class AuthentikLdapCharm(ops.CharmBase):
             )
 
         # Adopt the requirer-requested group if it already exists.
-        self._apply_group_membership(client, user_pk, None, requested_group)
+        self._apply_group_membership(user_pk, None, requested_group)
 
         self._set_peer_data(
             f"client_{relation_id}",
@@ -830,9 +827,6 @@ class AuthentikLdapCharm(ops.CharmBase):
         occupied username) and moves adopt-only group membership. Returns the
         effective username.
         """
-        info = self.server_info.get_info()
-        if not info:
-            return current_username
         creds = self._get_relation_credentials(relation_id)
         last_user = creds.get("last_user", "")
         last_group = creds.get("last_group", "")
@@ -842,21 +836,20 @@ class AuthentikLdapCharm(ops.CharmBase):
         if req_user == last_user and req_group == last_group:
             return current_username
 
-        client = AuthentikApiClient(info.host, info.api_token)
         username = current_username
         if req_user != last_user:
             target = self._bind_user_name(relation_id, requested_user)
             if target != username:
-                conflict = client.find_user_by_username(target)
+                conflict = self._api_client.find_user_by_username(target)
                 if conflict and conflict.pk != user_pk:
                     raise AuthentikMigrationError(
                         f"Target bind username {target!r} is owned by another user"
                     )
-                client.rename_user(user_pk, target)
+                self._api_client.rename_user(user_pk, target)
                 username = target
 
         if req_group != last_group:
-            self._apply_group_membership(client, user_pk, last_group, req_group)
+            self._apply_group_membership(user_pk, last_group, req_group)
 
         self._set_peer_data(
             f"client_{relation_id}",

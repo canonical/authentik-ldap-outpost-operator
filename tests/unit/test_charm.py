@@ -7,9 +7,7 @@ import json
 from typing import Any
 
 import ops
-import pytest
 from ops import testing
-from scenario.errors import UncaughtCharmError
 from unit.conftest import DEPLOYMENT_IDENTITY, create_state
 
 from api_client import AuthentikConnectionError, AuthentikHttpError, AuthentikNotFoundError
@@ -52,6 +50,22 @@ class TestHolisticHandler:
         state_out = context.run(context.on.config_changed(), state_in)
         container_out = state_out.get_container("authentik-ldap")
         assert "authentik-ldap" in container_out.plan.services
+
+    def test_authentik_insecure_is_set(
+        self, context: testing.Context, server_info_relation: testing.Relation
+    ) -> None:
+        """AUTHENTIK_INSECURE is set for the internal HTTP connection to the server."""
+        state_in = create_state(
+            can_connect=True,
+            relations=[server_info_relation],
+            secrets=[
+                testing.Secret({"api-token": "token123"}, id="secret:xyz"),
+                testing.Secret({"bootstrap-password": "password123"}, id="secret:abc"),
+            ],
+        )
+        state_out = context.run(context.on.config_changed(), state_in)
+        service = state_out.get_container("authentik-ldap").plan.services["authentik-ldap"]
+        assert service.environment["AUTHENTIK_INSECURE"] == "true"
 
 
 class TestCollectStatus:
@@ -654,7 +668,7 @@ class TestProvisionAuthentikResources:
         server_info_relation: testing.Relation,
         mocked_api_client: Any,
     ) -> None:
-        """A non-404 verification failure bubbles without replaying mutations."""
+        """A non-404 API failure is caught, resetting can_plan and skipping planning."""
         peer_relation = testing.PeerRelation(
             endpoint="authentik-ldap-peers",
             interface="authentik_ldap_peers",
@@ -681,15 +695,16 @@ class TestProvisionAuthentikResources:
         mock_client = mocked_api_client.return_value
         mock_client.check_outpost_exists.side_effect = AuthentikHttpError("unavailable", 503)
 
-        # An unavailable Authentik API must surface (crash -> Juju retries), not silently reprovision.
-        with pytest.raises(UncaughtCharmError, match="AuthentikHttpError"):
-            context.run(
-                context.on.config_changed(),
-                create_state(relations=[server_info_relation, peer_relation], secrets=secrets),
-            )
+        # The transient API failure is caught by the holistic handler: the hook must
+        # not crash, must not reprovision, and must leave the Pebble layer unplanned.
+        state_out = context.run(
+            context.on.config_changed(),
+            create_state(relations=[server_info_relation, peer_relation], secrets=secrets),
+        )
 
-        # A transient verification failure must not trigger fresh (re)provisioning.
         mock_client.get_or_create_provider.assert_not_called()
+        container_out = state_out.get_container("authentik-ldap")
+        assert "authentik-ldap" not in container_out.plan.services
 
     def test_follower_reads_outpost_token_secret_by_id(
         self, context: testing.Context, server_info_relation: testing.Relation
@@ -1168,6 +1183,54 @@ class TestSearchAuthorization:
         assert not hasattr(mock_client, "add_user_to_group") or not (
             mock_client.add_user_to_group.called
         )
+
+    def test_search_permission_not_reassigned_when_already_verified(
+        self,
+        context: testing.Context,
+        server_info_relation: testing.Relation,
+        mocked_api_client: Any,
+    ) -> None:
+        """A verified provider-scoped grant is not re-assigned on the next config change."""
+        ldap_relation = testing.Relation(
+            endpoint="ldap", interface="ldap", remote_app_name="nextcloud"
+        )
+        peer_relation = testing.PeerRelation(
+            endpoint="authentik-ldap-peers",
+            interface="authentik_ldap_peers",
+            local_app_data={
+                "provider_pk": "1",
+                "outpost_uuid": "outpost-uuid",
+                "outpost_token_secret_id": "secret:outpost",
+                "search_role_uuid": "role-uuid",
+                "search_permission_verified": "1",
+                "last_base_dn": "dc=ldap,dc=goauthentik,dc=io",
+                "last_search_mode": "cached",
+                "last_bind_mode": "cached",
+                "last_mfa_support": "False",
+                f"client_{ldap_relation.id}": json.dumps({"user_id": "42", "username": "bind"}),
+            },
+        )
+        token_secret = testing.Secret(
+            {"token": "mock-token-123"},
+            id="secret:outpost",
+            owner="app",
+            label=f"authentik-ldap-outpost-token-{DEPLOYMENT_IDENTITY}",
+        )
+        state_in = create_state(
+            can_connect=True,
+            relations=[server_info_relation, ldap_relation, peer_relation],
+            secrets=self._bootstrap_secrets() + [token_secret],
+            config={"base_dn": "dc=changed,dc=io"},
+        )
+
+        mock_client = mocked_api_client.return_value
+
+        context.run(context.on.config_changed(), state_in)
+
+        # Already verified for provider_pk 1 with the same role: skip the redundant grant.
+        mock_client.assign_provider_search_permission.assert_not_called()
+        # Role membership is still reconciled idempotently.
+        mock_client.add_user_to_role.assert_any_call("role-uuid", 42)
 
 
 class TestRequirerIdentity:

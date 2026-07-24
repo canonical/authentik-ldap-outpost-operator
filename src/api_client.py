@@ -11,7 +11,7 @@ from urllib.parse import quote, urlparse
 import requests
 import tenacity
 
-from exceptions import AuthentikAuthorizationError, AuthentikMigrationError
+from exceptions import AuthentikAuthorizationError, AuthentikMigrationError, CharmError
 
 logger = logging.getLogger(__name__)
 
@@ -56,7 +56,7 @@ class AssignedPermission:
     object_pk: Optional[str] = None
 
 
-class AuthentikApiError(Exception):
+class AuthentikApiError(CharmError):
     """Base exception for Authentik API errors."""
 
 
@@ -189,7 +189,10 @@ class AuthentikApiClient:
             A combined list of all results across all pages.
         """
         results = []
-        while endpoint:
+        max_pages = 500
+        for _ in range(max_pages):
+            if not endpoint:
+                return results
             res = self._request(endpoint)
             results.extend(res.get("results", []))
             next_url = res.get("next")
@@ -200,7 +203,9 @@ class AuthentikApiClient:
                     endpoint += f"?{parsed_url.query}"
             else:
                 endpoint = None
-        return results
+        raise AuthentikApiError(
+            f"Pagination exceeded {max_pages} pages; aborting to avoid an unbounded loop"
+        )
 
     def resolve_invalidation_flow_id(self) -> str:
         """Resolve the default provider invalidation flow by slug.
@@ -309,29 +314,36 @@ class AuthentikApiClient:
                 provider_pk = prov.get("pk")
                 break
 
-        inval_flow = self.resolve_invalidation_flow_id()
-        bind_flow = self.get_or_create_ldap_bind_flow()
-
-        provider_data = {
-            "name": name,
-            "authentication_flow": bind_flow,
-            "authorization_flow": bind_flow,
-            "invalidation_flow": inval_flow,
-            "base_dn": base_dn,
-            "search_mode": search_mode,
-            "bind_mode": bind_mode,
-            "mfa_support": mfa_support,
-        }
-
         if provider_pk:
             logger.info(
                 "Found existing LDAP Provider '%s' (ID: %s). Syncing config.", name, provider_pk
             )
+            # PATCH is a partial update: only the managed config fields are sent so an
+            # existing provider's flows are left untouched (and flow resolution skipped).
+            provider_data = {
+                "name": name,
+                "base_dn": base_dn,
+                "search_mode": search_mode,
+                "bind_mode": bind_mode,
+                "mfa_support": mfa_support,
+            }
             self._request(
                 f"/api/v3/providers/ldap/{provider_pk}/", method="PATCH", data=provider_data
             )
         else:
             logger.info("LDAP Provider '%s' not found. Creating a new one.", name)
+            inval_flow = self.resolve_invalidation_flow_id()
+            bind_flow = self.get_or_create_ldap_bind_flow()
+            provider_data = {
+                "name": name,
+                "authentication_flow": bind_flow,
+                "authorization_flow": bind_flow,
+                "invalidation_flow": inval_flow,
+                "base_dn": base_dn,
+                "search_mode": search_mode,
+                "bind_mode": bind_mode,
+                "mfa_support": mfa_support,
+            }
             res = self._request("/api/v3/providers/ldap/", method="POST", data=provider_data)
             provider_pk = res.get("pk")
 
@@ -649,38 +661,6 @@ class AuthentikApiClient:
         if not key:
             raise AuthentikApiError(f"Could not retrieve token secret key for {token_identifier}")
         return key
-
-    def create_service_account(self, name: str) -> Tuple[int, str]:
-        """Create a dedicated service account user.
-
-        Args:
-            name: Name of the service account.
-
-        Returns:
-            A tuple of (user_pk, username).
-        """
-        # First check if the service account user already exists
-        encoded_name = quote(name)
-        existing = self._request(f"/api/v3/core/users/?name={encoded_name}")
-        results = existing.get("results", [])
-        for user in results:
-            # Service accounts usernames usually have a prefix of 'service-account-'
-            if user.get("name") == name:
-                return user.get("pk"), user.get("username")
-
-        logger.info("Creating Service Account user: %s", name)
-        payload = {
-            "name": name,
-            "create_token": False,
-        }
-        res = self._request("/api/v3/core/users/service_account/", method="POST", data=payload)
-        user_pk = res.get("user", {}).get("pk")
-        username = res.get("user", {}).get("username")
-
-        if not user_pk or not username:
-            raise AuthentikApiError(f"Failed to create service account {name}")
-
-        return user_pk, username
 
     def create_ldap_bind_user(self, name: str) -> Tuple[int, str]:
         """Create a standard user account to act as an LDAP Bind account.
