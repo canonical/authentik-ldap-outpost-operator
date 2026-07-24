@@ -13,7 +13,6 @@ EnvVars: TypeAlias = Mapping[str, Union[str, bool]]
 DEFAULT_CONTAINER_ENV: EnvVars = {
     "AUTHENTIK_HOST": "",
     "AUTHENTIK_TOKEN": "",
-    "AUTHENTIK_INSECURE": "true",
     "AUTHENTIK_LOG_LEVEL": "info",
     "GOFIPS": "1",
 }

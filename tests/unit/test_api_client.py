@@ -124,6 +124,51 @@ class TestAuthentikApiClient:
         results = client._request_all("/api/v3/test/")
         assert results == [{"pk": "1"}, {"pk": "2"}]
 
+    @patch.object(AuthentikApiClient, "_request")
+    def test_request_all_guards_against_unbounded_pagination(
+        self, mock_request: MagicMock, client: AuthentikApiClient
+    ) -> None:
+        """_request_all raises rather than looping forever on a self-referential 'next'."""
+        mock_request.return_value = {
+            "results": [{"pk": "1"}],
+            "next": "http://authentik:9000/api/v3/test/?page=next",
+        }
+        with pytest.raises(AuthentikApiError, match="Pagination exceeded"):
+            client._request_all("/api/v3/test/")
+        assert mock_request.call_count == 500
+
+    @patch.object(AuthentikApiClient, "_request_all")
+    @patch.object(AuthentikApiClient, "_request")
+    def test_get_or_create_outpost_payload_secure_by_default(
+        self, mock_request: MagicMock, mock_request_all: MagicMock
+    ) -> None:
+        """A freshly created outpost keeps TLS verification on unless opted out."""
+        secure_client = AuthentikApiClient(host="http://authentik:9000", token="secret-token")
+        mock_request_all.return_value = []
+        mock_request.return_value = {"pk": "outpost-uuid", "token_identifier": "tok"}
+
+        secure_client.get_or_create_outpost(name="outpost", provider_pk=1)
+
+        _, kwargs = mock_request.call_args
+        assert kwargs["data"]["config"]["authentik_host_insecure"] is False
+
+    @patch.object(AuthentikApiClient, "_request_all")
+    @patch.object(AuthentikApiClient, "_request")
+    def test_get_or_create_outpost_payload_opt_in_insecure(
+        self, mock_request: MagicMock, mock_request_all: MagicMock
+    ) -> None:
+        """An insecure client marks the created outpost as skipping TLS verification."""
+        insecure_client = AuthentikApiClient(
+            host="http://authentik:9000", token="secret-token", insecure=True
+        )
+        mock_request_all.return_value = []
+        mock_request.return_value = {"pk": "outpost-uuid", "token_identifier": "tok"}
+
+        insecure_client.get_or_create_outpost(name="outpost", provider_pk=1)
+
+        _, kwargs = mock_request.call_args
+        assert kwargs["data"]["config"]["authentik_host_insecure"] is True
+
     def test_client_reuses_one_authenticated_session(self, client: AuthentikApiClient) -> None:
         """All client requests use the session created during initialization."""
         response = MagicMock(status_code=200, text="")
@@ -359,7 +404,7 @@ class TestAuthentikApiClient:
         mock_bind_flow: MagicMock,
         client: AuthentikApiClient,
     ) -> None:
-        """Test get_or_create_provider patches an existing provider's config."""
+        """Test get_or_create_provider patches an existing provider's config without flows."""
         mock_request_all.return_value = [{"name": "test-provider", "pk": 42}]
         mock_resolve_invalidation.return_value = "inval-flow-uuid"
         mock_bind_flow.return_value = "bind-flow-uuid"
@@ -375,20 +420,21 @@ class TestAuthentikApiClient:
 
         assert provider_pk == 42
         mock_request_all.assert_called_once_with("/api/v3/providers/ldap/?search=test-provider")
+        # PATCH is a partial update: only managed config fields, no flow fields.
         mock_request.assert_called_once_with(
             "/api/v3/providers/ldap/42/",
             method="PATCH",
             data={
                 "name": "test-provider",
-                "authentication_flow": "bind-flow-uuid",
-                "authorization_flow": "bind-flow-uuid",
-                "invalidation_flow": "inval-flow-uuid",
                 "base_dn": "dc=example,dc=com",
                 "search_mode": "direct",
                 "bind_mode": "direct",
                 "mfa_support": False,
             },
         )
+        # Flow resolution must be skipped entirely on the PATCH path.
+        mock_resolve_invalidation.assert_not_called()
+        mock_bind_flow.assert_not_called()
 
 
 class TestGroupMembership:

@@ -200,7 +200,6 @@ def mocked_api_client(mocker: Any) -> Any:
     mock_instance.get_or_create_provider.return_value = 1
     mock_instance.get_or_create_outpost.return_value = ("outpost-uuid", "token-ident")
     mock_instance.get_token_key.return_value = "mock-token-123"
-    mock_instance.create_service_account.return_value = (42, "ldap-client-relation-1")
     mock_instance.create_ldap_bind_user.return_value = (42, "ldap-client-relation-1")
     mock_instance.check_outpost_exists.return_value = True
     # RBAC search-authorization defaults (idempotent, verified by the client).

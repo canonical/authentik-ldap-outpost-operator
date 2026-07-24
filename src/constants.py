@@ -24,4 +24,4 @@ PEBBLE_READY_CHECK_NAME = "ready"
 BASE_DN = "DC=ldap,DC=goauthentik,DC=io"
 BIND_DN = "cn=akadmin,ou=users,DC=ldap,DC=goauthentik,DC=io"
 
-AUTHENTIK_INSECURE = "true"
+AUTHENTIK_INSECURE = "false"
