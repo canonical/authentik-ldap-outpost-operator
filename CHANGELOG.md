@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.2.1](https://github.com/canonical/authentik-ldap-outpost-operator/compare/v1.2.0...v1.2.1) (2026-07-24)
+
+
+### Bug Fixes
+
+* outpost resilience and API efficiency ([eae6480](https://github.com/canonical/authentik-ldap-outpost-operator/commit/eae64800f22b87bde20b19cb67f2e40986369359))
+* outpost resilience and API efficiency ([#51](https://github.com/canonical/authentik-ldap-outpost-operator/issues/51)) ([a1d4465](https://github.com/canonical/authentik-ldap-outpost-operator/commit/a1d44659f2b59b83a91491be2cd00c71513570d9))
+* outpost resilience, TLS-verification knob, and API efficiency ([a004681](https://github.com/canonical/authentik-ldap-outpost-operator/commit/a0046813830d64b04ee6f532232f53813ae6eeb0))
+
 ## [1.2.0](https://github.com/canonical/authentik-ldap-outpost-operator/compare/v1.1.0...v1.2.0) (2026-07-23)
 
 
