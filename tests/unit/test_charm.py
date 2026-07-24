@@ -51,10 +51,10 @@ class TestHolisticHandler:
         container_out = state_out.get_container("authentik-ldap")
         assert "authentik-ldap" in container_out.plan.services
 
-    def test_tls_verification_enabled_by_default(
+    def test_authentik_insecure_is_set(
         self, context: testing.Context, server_info_relation: testing.Relation
     ) -> None:
-        """AUTHENTIK_INSECURE defaults to 'false' so TLS verification stays on."""
+        """AUTHENTIK_INSECURE is set for the internal HTTP connection to the server."""
         state_in = create_state(
             can_connect=True,
             relations=[server_info_relation],
@@ -62,23 +62,6 @@ class TestHolisticHandler:
                 testing.Secret({"api-token": "token123"}, id="secret:xyz"),
                 testing.Secret({"bootstrap-password": "password123"}, id="secret:abc"),
             ],
-        )
-        state_out = context.run(context.on.config_changed(), state_in)
-        service = state_out.get_container("authentik-ldap").plan.services["authentik-ldap"]
-        assert service.environment["AUTHENTIK_INSECURE"] == "false"
-
-    def test_tls_verification_can_be_disabled_via_config(
-        self, context: testing.Context, server_info_relation: testing.Relation
-    ) -> None:
-        """Opting into authentik-host-insecure sets AUTHENTIK_INSECURE to 'true'."""
-        state_in = create_state(
-            can_connect=True,
-            relations=[server_info_relation],
-            secrets=[
-                testing.Secret({"api-token": "token123"}, id="secret:xyz"),
-                testing.Secret({"bootstrap-password": "password123"}, id="secret:abc"),
-            ],
-            config={"authentik-host-insecure": True},
         )
         state_out = context.run(context.on.config_changed(), state_in)
         service = state_out.get_container("authentik-ldap").plan.services["authentik-ldap"]

@@ -139,32 +139,15 @@ class TestAuthentikApiClient:
 
     @patch.object(AuthentikApiClient, "_request_all")
     @patch.object(AuthentikApiClient, "_request")
-    def test_get_or_create_outpost_payload_secure_by_default(
+    def test_get_or_create_outpost_marks_host_insecure(
         self, mock_request: MagicMock, mock_request_all: MagicMock
     ) -> None:
-        """A freshly created outpost keeps TLS verification on unless opted out."""
-        secure_client = AuthentikApiClient(host="http://authentik:9000", token="secret-token")
+        """The created outpost is marked authentik_host_insecure (internal HTTP host)."""
+        client = AuthentikApiClient(host="http://authentik:9000", token="secret-token")
         mock_request_all.return_value = []
         mock_request.return_value = {"pk": "outpost-uuid", "token_identifier": "tok"}
 
-        secure_client.get_or_create_outpost(name="outpost", provider_pk=1)
-
-        _, kwargs = mock_request.call_args
-        assert kwargs["data"]["config"]["authentik_host_insecure"] is False
-
-    @patch.object(AuthentikApiClient, "_request_all")
-    @patch.object(AuthentikApiClient, "_request")
-    def test_get_or_create_outpost_payload_opt_in_insecure(
-        self, mock_request: MagicMock, mock_request_all: MagicMock
-    ) -> None:
-        """An insecure client marks the created outpost as skipping TLS verification."""
-        insecure_client = AuthentikApiClient(
-            host="http://authentik:9000", token="secret-token", insecure=True
-        )
-        mock_request_all.return_value = []
-        mock_request.return_value = {"pk": "outpost-uuid", "token_identifier": "tok"}
-
-        insecure_client.get_or_create_outpost(name="outpost", provider_pk=1)
+        client.get_or_create_outpost(name="outpost", provider_pk=1)
 
         _, kwargs = mock_request.call_args
         assert kwargs["data"]["config"]["authentik_host_insecure"] is True

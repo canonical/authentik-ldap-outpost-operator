@@ -80,16 +80,14 @@ class AuthentikConnectionError(AuthentikApiError):
 class AuthentikApiClient:
     """Client for communicating with the Authentik REST API."""
 
-    def __init__(self, host: str, token: str, insecure: bool = False):
+    def __init__(self, host: str, token: str):
         """Initialize the API client.
 
         Args:
             host: The Authentik server URL (e.g., "http://authentik-server:9000").
             token: The administrator bootstrap or API token.
-            insecure: Whether the outpost should skip TLS verification of the host.
         """
         self._host = host.rstrip("/")
-        self._insecure = insecure
         self._session = requests.Session()
         self._session.headers.update({
             "Authorization": f"Bearer {token}",
@@ -460,7 +458,7 @@ class AuthentikApiClient:
                 "config": {
                     "log_level": "info",
                     "authentik_host": self._host,
-                    "authentik_host_insecure": self._insecure,
+                    "authentik_host_insecure": True,
                 },
             }
             res = self._request("/api/v3/outposts/instances/", method="POST", data=outpost_data)

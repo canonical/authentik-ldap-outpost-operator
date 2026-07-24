@@ -65,6 +65,7 @@ class OutpostEnv:
         return {
             "AUTHENTIK_HOST": self.host,
             "AUTHENTIK_TOKEN": self.token,
+            "AUTHENTIK_INSECURE": "true",
         }
 
 
@@ -469,9 +470,7 @@ class AuthentikLdapCharm(ops.CharmBase):
         info = self.server_info.get_info()
         if not info:
             return None
-        return AuthentikApiClient(
-            info.host, info.api_token, insecure=self._config.authentik_host_insecure
-        )
+        return AuthentikApiClient(info.host, info.api_token)
 
     def _provision_authentik_resources(self) -> None:
         """Provision the Upstream Provider and Outpost on Authentik."""

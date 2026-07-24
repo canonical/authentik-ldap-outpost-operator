@@ -41,21 +41,11 @@ class CharmConfig:
 
         return {
             "AUTHENTIK_LOG_LEVEL": self._config.get("log_level", "info"),
-            "AUTHENTIK_INSECURE": "true" if self.authentik_host_insecure else "false",
             "HTTP_PROXY": self._config.get("http_proxy", ""),
             "HTTPS_PROXY": self._config.get("https_proxy", ""),
             "NO_PROXY": self._config.get("no_proxy", ""),
             "AUTHENTIK_LISTEN__TRUSTED_PROXY_CIDRS": trusted_cidrs_str,
         }
-
-    @property
-    def authentik_host_insecure(self) -> bool:
-        """Whether the outpost skips TLS verification of the Authentik host.
-
-        Returns:
-            True to disable TLS verification, False (the secure default) to enforce it.
-        """
-        return bool(self._config.get("authentik-host-insecure", False))
 
     @property
     def ingress_domain(self) -> str:

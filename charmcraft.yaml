@@ -90,17 +90,6 @@ config:
         same Traefik instance, a port/routing conflict will occur.
       type: boolean
       default: false
-    authentik-host-insecure:
-      description: |
-        Skip TLS certificate verification when the outpost connects to the
-        Authentik host.
-
-        WARNING: Disabling verification exposes the connection to the Authentik
-        server to man-in-the-middle attacks. Leave this disabled (the secure
-        default) unless the Authentik server presents a certificate the outpost
-        cannot otherwise verify.
-      type: boolean
-      default: false
 
 
 
