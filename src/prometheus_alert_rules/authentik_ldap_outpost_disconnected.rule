@@ -1,0 +1,10 @@
+groups:
+- name: AuthentikLdapOutpostDisconnected
+  rules:
+  - alert: AuthentikLdapOutpostDisconnected
+    expr: authentik_outpost_connection == 0
+    for: 5m
+    labels:
+      severity: error
+    annotations:
+      summary: "LDAP outpost unit {{ $labels.juju_unit }} of {{ $labels.juju_application }} in model {{ $labels.juju_model }} has lost its websocket connection to the authentik server; configuration updates and flow execution will fail"

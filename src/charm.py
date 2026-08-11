@@ -98,7 +98,12 @@ class AuthentikLdapCharm(ops.CharmBase):
         self.metrics_endpoint = MetricsEndpointProvider(
             self,
             relation_name=METRICS_ENDPOINT_RELATION,
-            jobs=[{"static_configs": [{"targets": [f"*:{METRICS_PORT}"]}]}],
+            jobs=[
+                {
+                    "job_name": "authentik_ldap_outpost_metrics",
+                    "static_configs": [{"targets": [f"*:{METRICS_PORT}"]}],
+                }
+            ],
         )
         self.log_forwarder = LogForwarder(self, relation_name=LOGGING_RELATION)
         self.grafana_dashboard = GrafanaDashboardProvider(

@@ -11,15 +11,15 @@ This spec covers the full observability stack for the LDAP outpost: log forwardi
 - **WHEN** `juju integrate authentik-ldap-outpost:logging loki:logging`
 - **THEN** logs from the workload container are forwarded to Loki
 
-### Requirement: `MetricsEndpointProvider` initialised with LDAP port
-`charm.py.__init__` SHALL instantiate `MetricsEndpointProvider` with a scrape job targeting `LDAP_PORT` (`:3389`). The implementer SHALL verify the actual metrics port before finalising the port number.
+### Requirement: `MetricsEndpointProvider` initialised with the metrics port
+`charm.py.__init__` SHALL instantiate `MetricsEndpointProvider` with a scrape job named `authentik_ldap_outpost_metrics` targeting `METRICS_PORT` (`:9300`) on the default `/metrics` path. `METRICS_PORT` SHALL NOT be opened with `unit.open_port()` — `prometheus_scrape` publishes the pod IP, so Prometheus reaches it pod-to-pod and opening the port would expose unauthenticated metrics through the Kubernetes Service.
 
 #### Scenario: Prometheus scrape job available
 - **WHEN** `juju integrate authentik-ldap-outpost:metrics-endpoint prometheus:metrics-endpoint`
 - **THEN** Prometheus can scrape metrics from the unit
 
 ### Requirement: `GrafanaDashboardProvider` initialised with dashboard template
-`charm.py.__init__` SHALL instantiate `GrafanaDashboardProvider(charm=self, relation_name=GRAFANA_DASHBOARD_RELATION)`. A placeholder dashboard template SHALL exist at `src/grafana_dashboards/authentik-ldap.json.tmpl`.
+`charm.py.__init__` SHALL instantiate `GrafanaDashboardProvider(charm=self, relation_name=GRAFANA_DASHBOARD_RELATION)`. A dashboard template SHALL exist at `src/grafana_dashboards/authentik-ldap.json.tmpl`.
 
 #### Scenario: Dashboard pushed to Grafana
 - **WHEN** `juju integrate authentik-ldap-outpost:grafana-dashboard grafana:grafana-dashboard`
@@ -47,8 +47,8 @@ This spec covers the full observability stack for the LDAP outpost: log forwardi
 - **WHEN** the Kubernetes API returns an error during patching
 - **THEN** the error is logged and `_on_holistic_handler` is called
 
-### Requirement: Placeholder alert rules exist
-`src/prometheus_alert_rules/authentik_ldap.rule` and `src/loki_alert_rules/authentik_ldap.rule` SHALL exist with valid YAML structure (placeholder expressions). `MetricsEndpointProvider` SHALL be configured to load rules from `src/prometheus_alert_rules/`.
+### Requirement: Alert rules exist
+`src/prometheus_alert_rules/` SHALL contain `authentik_ldap_outpost_unavailable.rule` (alerts `AuthentikLdapOutpostUnavailable-multiple` and `-all`) and `authentik_ldap_outpost_disconnected.rule` (alert `AuthentikLdapOutpostDisconnected`, firing when `authentik_outpost_connection == 0` for 5 minutes). `src/loki_alert_rules/` SHALL contain `authentik_ldap_outpost_high_severity_log.rule` (alert `HighFrequencyHighSeverityLog`, using the `{%%juju_topology%%}` stub). `MetricsEndpointProvider` SHALL be configured to load rules from `src/prometheus_alert_rules/`.
 
 #### Scenario: Alert rule files are valid YAML
 - **WHEN** the alert rule files are parsed
