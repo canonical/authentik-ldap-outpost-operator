@@ -25,7 +25,11 @@ from charms.observability_libs.v0.kubernetes_compute_resources_patch import (
 from charms.prometheus_k8s.v0.prometheus_scrape import MetricsEndpointProvider
 from charms.tempo_coordinator_k8s.v0.tracing import TracingEndpointRequirer
 
-from api_client import AuthentikApiClient, AuthentikApiError, AuthentikNotFoundError
+from api_client import (
+    AuthentikApiClient,
+    AuthentikApiError,
+    AuthentikNotFoundError,
+)
 from configs import CharmConfig
 from constants import (
     GRAFANA_DASHBOARD_RELATION,
@@ -40,7 +44,11 @@ from constants import (
     WORKLOAD_CONTAINER,
 )
 from env_vars import EnvVars
-from exceptions import AuthentikMigrationError, CharmError, PebbleError
+from exceptions import (
+    AuthentikMigrationError,
+    CharmError,
+    PebbleError,
+)
 from integrations import (
     LdapProviderIntegration,
     ServerInfoIntegration,
@@ -337,7 +345,9 @@ class AuthentikLdapCharm(ops.CharmBase):
         Creates (or adopts) a deployment-owned role, assigns the
         ``search_full_directory`` permission scoped to exactly this LDAP provider,
         strictly verifies the grant is object-scoped, then adds every tracked bind
-        user to the role. Role membership is idempotent on Authentik.
+        user to the role. Confirmed (user, role) memberships are cached in peer
+        data keyed by the role UUID so unchanged memberships are not re-sent on
+        every reconcile; the cache is invalidated when the role UUID changes.
 
         Args:
             provider_pk: The primary key of this deployment's LDAP provider.
@@ -354,10 +364,40 @@ class AuthentikLdapCharm(ops.CharmBase):
             self._set_peer_data("search_permission_verified", str(provider_pk))
         self._set_peer_data("search_role_uuid", role.pk)
 
+        applied = self._get_role_membership(role.pk)
         for relation in self.model.relations.get(LDAP_RELATION, []):
             creds = self._get_relation_credentials(relation.id)
             if user_id := creds.get("user_id"):
-                self._api_client.add_user_to_role(role.pk, int(user_id))
+                uid = int(user_id)
+                if uid in applied:
+                    continue
+                self._api_client.add_user_to_role(role.pk, uid)
+                applied.add(uid)
+        self._set_role_membership(role.pk, applied)
+
+    def _get_role_membership(self, role_uuid: str) -> set[int]:
+        """Return the bind-user IDs already confirmed as members of the role.
+
+        A cached role UUID that differs from ``role_uuid`` means the prior grants
+        are gone, so the cache is treated as empty (invalidated).
+        """
+        raw = self._get_peer_data("search_role_members")
+        if not raw:
+            return set()
+        try:
+            data = json.loads(raw)
+        except (TypeError, json.JSONDecodeError):
+            return set()
+        if data.get("role_uuid") != role_uuid:
+            return set()
+        return {int(uid) for uid in data.get("members", [])}
+
+    def _set_role_membership(self, role_uuid: str, members: set[int]) -> None:
+        """Persist the bind-user IDs confirmed as members of the search role."""
+        self._set_peer_data(
+            "search_role_members",
+            json.dumps({"role_uuid": role_uuid, "members": sorted(members)}),
+        )
 
     def _verify_and_update_existing_resources(
         self,
@@ -787,6 +827,9 @@ class AuthentikLdapCharm(ops.CharmBase):
             self._set_peer_data("search_permission_verified", provider_pk_peer)
         if role_uuid:
             self._api_client.add_user_to_role(role_uuid, user_pk)
+            applied = self._get_role_membership(role_uuid)
+            applied.add(user_pk)
+            self._set_role_membership(role_uuid, applied)
         else:
             logger.warning(
                 "Search role is not ready; bind user %s cannot search until provisioning completes",
