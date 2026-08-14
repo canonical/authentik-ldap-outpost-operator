@@ -68,6 +68,21 @@ class TestHolisticHandler:
         service = state_out.get_container("authentik-ldap").plan.services["authentik-ldap"]
         assert service.environment["AUTHENTIK_INSECURE"] == "true"
 
+    def test_upgrade_charm_reconciles(
+        self, context: testing.Context, server_info_relation: testing.Relation
+    ) -> None:
+        """A charm upgrade reconciles instead of waiting for the next unrelated event."""
+        state_in = create_state(
+            can_connect=True,
+            relations=[server_info_relation],
+            secrets=[
+                testing.Secret({"api-token": "token123"}, id="secret:xyz"),
+                testing.Secret({"bootstrap-password": "password123"}, id="secret:abc"),
+            ],
+        )
+        state_out = context.run(context.on.upgrade_charm(), state_in)
+        assert "authentik-ldap" in state_out.get_container("authentik-ldap").plan.services
+
 
 class TestCollectStatus:
     """Tests for Juju status collection."""
@@ -663,6 +678,62 @@ class TestProvisionAuthentikResources:
         # get_or_create_provider should be called because outpost was not found
         mock_client.get_or_create_provider.assert_called_once()
 
+    def test_reprovision_rotates_outpost_token_secret(
+        self,
+        context: testing.Context,
+        server_info_relation: testing.Relation,
+        mocked_api_client: Any,
+    ) -> None:
+        """A re-provisioned Authentik mints a new token: the secret and layer must follow.
+
+        Reproduces the case where the Authentik database is replaced (e.g. the server is
+        re-related to a fresh PostgreSQL): the cached outpost is gone and the freshly
+        minted token differs from the one already stored in the application secret.
+        """
+        token_secret = testing.Secret(
+            {"token": "stale-token-123"},
+            id="secret:outpost",
+            owner="app",
+            label=f"authentik-ldap-outpost-token-{DEPLOYMENT_IDENTITY}",
+        )
+        peer_relation = testing.PeerRelation(
+            endpoint="authentik-ldap-peers",
+            interface="authentik_ldap_peers",
+            local_app_data={
+                "provider_pk": "1",
+                "outpost_uuid": "outpost-uuid",
+                "outpost_token_secret_id": "secret:outpost",
+                "last_base_dn": "dc=ldap,dc=goauthentik,dc=io",
+                "last_search_mode": "cached",
+                "last_bind_mode": "cached",
+                "last_mfa_support": "False",
+            },
+        )
+        state_in = create_state(
+            can_connect=True,
+            relations=[server_info_relation, peer_relation],
+            secrets=[
+                testing.Secret({"api-token": "token123"}, id="secret:xyz"),
+                testing.Secret({"bootstrap-password": "password123"}, id="secret:abc"),
+                token_secret,
+            ],
+        )
+
+        mock_client = mocked_api_client.return_value
+        mock_client.check_outpost_exists.side_effect = AuthentikNotFoundError("Not found", 404)
+        mock_client.get_token_key.return_value = "rotated-token-456"
+
+        state_out = context.run(context.on.config_changed(), state_in)
+
+        # The new revision must hold the rotated token...
+        assert state_out.get_secret(id="secret:outpost").latest_content == {
+            "token": "rotated-token-456"
+        }
+        # ...and the workload must be planned with it in the very same hook, because
+        # Juju does not expose a just-written revision back to the owner mid-hook.
+        service = state_out.get_container("authentik-ldap").plan.services["authentik-ldap"]
+        assert service.environment["AUTHENTIK_TOKEN"] == "rotated-token-456"
+
     def test_verification_transient_failure_does_not_reprovision(
         self,
         context: testing.Context,
@@ -737,6 +808,40 @@ class TestProvisionAuthentikResources:
         service = state_out.get_container("authentik-ldap").plan.services["authentik-ldap"]
         assert service.environment["AUTHENTIK_TOKEN"] == "secret-backed-token"
 
+    def test_follower_uses_rotated_outpost_token_revision(
+        self, context: testing.Context, server_info_relation: testing.Relation
+    ) -> None:
+        """A follower must pick up the revision the leader rotated to, not the tracked one."""
+        token_secret = testing.Secret(
+            tracked_content={"token": "stale-token-123"},
+            latest_content={"token": "rotated-token-456"},
+            id="secret:outpost",
+            owner="app",
+            label=f"authentik-ldap-outpost-token-{DEPLOYMENT_IDENTITY}",
+        )
+        secrets = [
+            token_secret,
+            testing.Secret({"api-token": "token123"}, id="secret:xyz"),
+            testing.Secret({"bootstrap-password": "password123"}, id="secret:abc"),
+        ]
+        peer = testing.PeerRelation(
+            endpoint="authentik-ldap-peers",
+            interface="authentik_ldap_peers",
+            local_app_data={"outpost_token_secret_id": token_secret.id},
+        )
+
+        state_out = context.run(
+            context.on.config_changed(),
+            create_state(
+                leader=False,
+                relations=[server_info_relation, peer],
+                secrets=secrets,
+            ),
+        )
+
+        service = state_out.get_container("authentik-ldap").plan.services["authentik-ldap"]
+        assert service.environment["AUTHENTIK_TOKEN"] == "rotated-token-456"
+
     def test_missing_bind_secret_rotates_and_republishes_password(
         self,
         context: testing.Context,
@@ -780,6 +885,60 @@ class TestProvisionAuthentikResources:
         assert state_out.get_secret(id=bind_secret_id).tracked_content.keys() == {"password"}
         peer_out = state_out.get_relation(peer.id)
         assert "password" not in json.loads(peer_out.local_app_data[f"client_{ldap_relation.id}"])
+
+    def test_reprovision_rebuilds_bind_users_after_authentik_state_loss(
+        self,
+        context: testing.Context,
+        server_info_relation: testing.Relation,
+        mocked_api_client: Any,
+    ) -> None:
+        """A lost Authentik database must not leave consumers pinned to dangling user IDs."""
+        ldap_relation = testing.Relation(
+            endpoint="ldap", interface="ldap", remote_app_name="nextcloud"
+        )
+        peer = testing.PeerRelation(
+            endpoint="authentik-ldap-peers",
+            interface="authentik_ldap_peers",
+            local_app_data={
+                "provider_pk": "1",
+                "outpost_uuid": "outpost-uuid",
+                "outpost_token_secret_id": "secret:outpost",
+                "last_base_dn": "dc=ldap,dc=goauthentik,dc=io",
+                "last_search_mode": "cached",
+                "last_bind_mode": "cached",
+                "last_mfa_support": "False",
+                f"client_{ldap_relation.id}": json.dumps({
+                    "user_id": "42",
+                    "username": "ldap-client-relation-1",
+                }),
+            },
+        )
+        secrets = [
+            testing.Secret({"api-token": "token123"}, id="secret:xyz"),
+            testing.Secret({"bootstrap-password": "password123"}, id="secret:abc"),
+            testing.Secret(
+                {"token": "mock-token-123"},
+                id="secret:outpost",
+                owner="app",
+                label=f"authentik-ldap-outpost-token-{DEPLOYMENT_IDENTITY}",
+            ),
+        ]
+
+        mock_client = mocked_api_client.return_value
+        mock_client.check_outpost_exists.side_effect = AuthentikNotFoundError("Not found", 404)
+
+        state_out = context.run(
+            context.on.config_changed(),
+            create_state(relations=[server_info_relation, ldap_relation, peer], secrets=secrets),
+        )
+
+        # The bind user is re-adopted by its deterministic username instead of being
+        # reconciled against the primary key from the discarded database.
+        mock_client.create_ldap_bind_user.assert_called_once()
+        peer_out = state_out.get_relation(peer.id)
+        assert json.loads(peer_out.local_app_data[f"client_{ldap_relation.id}"])["user_id"] == "42"
+        relation_out = state_out.get_relation(ldap_relation.id)
+        assert relation_out.local_app_data["bind_password_secret"]
 
     def test_failed_orphan_deletion_preserves_tracking_for_retry(
         self,
