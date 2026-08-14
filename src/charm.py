@@ -87,6 +87,9 @@ class AuthentikLdapCharm(ops.CharmBase):
         self._pebble = PebbleService(self.unit)
         self._workload_service = WorkloadService(self.unit)
         self._config = CharmConfig(self, self.model.config)
+        # Token minted during this event: Juju exposes a written secret revision only
+        # after the hook completes, so the in-memory value is authoritative until then.
+        self._fresh_outpost_token: Optional[str] = None
 
         self.server_info = ServerInfoIntegration(self)
         self.ldap_provider = LdapProviderIntegration(self)
@@ -285,39 +288,60 @@ class AuthentikLdapCharm(ops.CharmBase):
         if self.unit.is_leader() and (peers := self._peers):
             peers.data[self.app].pop(key, None)
 
-    def _read_outpost_token_secret(self, secret_id: str) -> Optional[str]:
-        """Read an outpost token from an application-owned secret."""
+    def _outpost_token_secret(self) -> Optional[ops.Secret]:
+        """Resolve the application-owned secret holding the outpost token.
+
+        Prefers the reference published in peer data and falls back to the well-known
+        label, so a unit still finds the secret when peer data has not carried the
+        reference yet.
+        """
+        if secret_id := self._get_peer_data("outpost_token_secret_id"):
+            try:
+                return self.model.get_secret(id=secret_id)
+            except (ops.SecretNotFoundError, ops.ModelError):
+                logger.warning("Outpost token secret %s is not readable", secret_id)
         try:
-            return self.model.get_secret(id=secret_id).get_content().get("token")
+            return self.model.get_secret(label=self._outpost_token_label)
         except (ops.SecretNotFoundError, ops.ModelError):
-            logger.warning("Outpost token secret %s is not readable", secret_id)
             return None
 
-    def _store_outpost_token(self, token: str) -> str:
-        """Store and verify the outpost token, returning its secret ID."""
-        secret_id = self._get_peer_data("outpost_token_secret_id")
-        if secret_id:
-            secret = self.model.get_secret(id=secret_id)
-            secret.set_content({"token": token})
+    def _store_outpost_token(self, token: str) -> None:
+        """Publish the outpost token to the app secret that followers read.
+
+        Juju only applies ``secret-add``/``secret-set`` once the hook completes, so a
+        just-written token is not readable back within this hook: the value is kept in
+        memory for the remainder of the event instead of being read back and verified.
+
+        Args:
+            token: The outpost API token minted by Authentik.
+        """
+        self._fresh_outpost_token = token
+
+        secret = self._outpost_token_secret()
+        if secret is None:
+            secret = self.app.add_secret({"token": token}, label=self._outpost_token_label)
         else:
-            try:
-                secret = self.model.get_secret(label=self._outpost_token_label)
-                secret.set_content({"token": token})
-            except ops.SecretNotFoundError:
-                secret = self.app.add_secret({"token": token}, label=self._outpost_token_label)
-            secret_id = secret.id
+            secret.set_content({"token": token})
 
-        if self._read_outpost_token_secret(secret_id) != token:
-            raise RuntimeError("Failed to verify outpost token secret")
-
-        self._set_peer_data("outpost_token_secret_id", secret_id)
-        return secret_id
+        self._set_peer_data("outpost_token_secret_id", str(secret.id))
 
     def _get_outpost_token(self) -> Optional[str]:
-        """Resolve the outpost token from its application-owned secret."""
-        if secret_id := self._get_peer_data("outpost_token_secret_id"):
-            return self._read_outpost_token_secret(secret_id)
-        return None
+        """Resolve the outpost token, preferring one minted during this event.
+
+        Reads the latest revision explicitly: from Juju 3.3.1 onwards a secret owner
+        tracks a revision like an observer, so the default read can return a superseded
+        token after the leader rotates it.
+        """
+        if self._fresh_outpost_token:
+            return self._fresh_outpost_token
+        secret = self._outpost_token_secret()
+        if secret is None:
+            return None
+        try:
+            return secret.peek_content().get("token")
+        except (ops.SecretNotFoundError, ops.ModelError):
+            logger.warning("Outpost token secret %s is not readable", secret.id)
+            return None
 
     def _set_peer_config_metadata(
         self,
@@ -447,7 +471,21 @@ class AuthentikLdapCharm(ops.CharmBase):
             return True
         except AuthentikNotFoundError:
             logger.info("Stored Authentik outpost no longer exists; reprovisioning")
+            self._discard_stale_bind_identities()
             return False
+
+    def _discard_stale_bind_identities(self) -> None:
+        """Forget cached bind-user identities that belong to a lost Authentik state.
+
+        A missing outpost means the Authentik database this charm provisioned against is
+        gone (for example the server was re-related to a fresh PostgreSQL), so every
+        cached user primary key is dangling and would make credential reconciliation
+        fail with 404s. Dropping the cache re-runs provisioning, which adopts the
+        deterministic bind username again and republishes a fresh password.
+        """
+        for relation_id in self._get_tracked_relation_ids():
+            logger.info("Discarding stale bind identity for relation %s", relation_id)
+            self._clear_relation_credentials(relation_id)
 
     def _provision_fresh_resources(
         self,
