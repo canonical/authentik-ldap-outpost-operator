@@ -68,6 +68,21 @@ class TestHolisticHandler:
         service = state_out.get_container("authentik-ldap").plan.services["authentik-ldap"]
         assert service.environment["AUTHENTIK_INSECURE"] == "true"
 
+    def test_upgrade_charm_reconciles(
+        self, context: testing.Context, server_info_relation: testing.Relation
+    ) -> None:
+        """A charm upgrade reconciles instead of waiting for the next unrelated event."""
+        state_in = create_state(
+            can_connect=True,
+            relations=[server_info_relation],
+            secrets=[
+                testing.Secret({"api-token": "token123"}, id="secret:xyz"),
+                testing.Secret({"bootstrap-password": "password123"}, id="secret:abc"),
+            ],
+        )
+        state_out = context.run(context.on.upgrade_charm(), state_in)
+        assert "authentik-ldap" in state_out.get_container("authentik-ldap").plan.services
+
 
 class TestCollectStatus:
     """Tests for Juju status collection."""

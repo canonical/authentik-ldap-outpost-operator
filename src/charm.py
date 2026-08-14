@@ -114,6 +114,7 @@ class AuthentikLdapCharm(ops.CharmBase):
         # Observe events that trigger the holistic handler
         for event in [
             self.on.install,
+            self.on.upgrade_charm,
             self.on.config_changed,
             self.on.leader_elected,
             self.on.update_status,
