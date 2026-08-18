@@ -1,0 +1,17 @@
+groups:
+- name: AuthentikLdapOutpostUnavailable
+  rules:
+  - alert: AuthentikLdapOutpostUnavailable-multiple
+    expr: sum by (juju_model, juju_application) (up) / count by (juju_model, juju_application) (up) < 0.7
+    for: 5m
+    labels:
+      severity: error
+    annotations:
+      summary: "30% of units of {{ $labels.juju_application }} in model {{ $labels.juju_model }} are down"
+  - alert: AuthentikLdapOutpostUnavailable-all
+    expr: sum by (juju_model, juju_application) (up) == 0
+    for: 5m
+    labels:
+      severity: fatal
+    annotations:
+      summary: "All units of {{ $labels.juju_application }} in model {{ $labels.juju_model }} are down"

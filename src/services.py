@@ -50,6 +50,7 @@ class AuthentikLdapWorkload:
                 PEBBLE_READY_CHECK_NAME: {
                     "override": "replace",
                     "level": "ready",
+                    "startup": "enabled",
                     "threshold": 10,
                     "tcp": {
                         "port": LDAP_PORT,
