@@ -1169,11 +1169,14 @@ class TestTraefikRouteRelation:
         # Trigger on.ready or relation_changed
         state_out = context.run(context.on.relation_changed(traefik_route_relation), state_in)
 
-        # Assert consumer relation gets ldaps_enabled=true and ldaps_urls pointing to the external host
+        # LDAPS is advertised via Traefik, but cleartext `urls` must keep pointing at
+        # the in-cluster Service: Traefik does not expose LDAP_PORT.
         consumer_rel = state_out.get_relation(ldap_relation.id)
         assert consumer_rel.local_app_data.get("ldaps_enabled") == "true"
         ldaps_urls = json.loads(consumer_rel.local_app_data.get("ldaps_urls", "[]"))
         assert ldaps_urls == ["ldaps://external.address.dns:636"]
+        urls = json.loads(consumer_rel.local_app_data.get("urls", "[]"))
+        assert urls == ["ldap://authentik-ldap-outpost.ldap-model.svc.cluster.local:3389"]
 
     def test_traefik_route_broken_disables_ldaps(
         self,
@@ -1224,9 +1227,145 @@ class TestTraefikRouteRelation:
         # Run standard holistic handler/config changed
         state_out = context.run(context.on.config_changed(), state_in)
 
-        # Assert consumer relation gets ldaps_enabled=false
+        # Without Traefik there is no LDAPS endpoint at all, so ldaps_urls must be
+        # empty rather than advertising a pod address that serves no TLS.
         consumer_rel = state_out.get_relation(ldap_relation.id)
         assert consumer_rel.local_app_data.get("ldaps_enabled") == "false"
+        assert json.loads(consumer_rel.local_app_data.get("ldaps_urls", "[]")) == []
+        urls = json.loads(consumer_rel.local_app_data.get("urls", "[]"))
+        assert urls == ["ldap://authentik-ldap-outpost.ldap-model.svc.cluster.local:3389"]
+
+    def test_expose_ldap_ingress_advertises_traefik_cleartext_endpoint(
+        self,
+        context: testing.Context,
+        server_info_relation: testing.Relation,
+    ) -> None:
+        """With expose_ldap_ingress, `urls` must point at Traefik's cleartext entrypoint.
+
+        Traefik publishes cleartext LDAP on EXTERNAL_LDAP_PORT, never on the
+        container's LDAP_PORT, so advertising the external host with 3389 would
+        hand consumers an unreachable endpoint.
+        """
+        secret_token = testing.Secret(
+            {"api-token": "token123"},
+            id="secret:xyz",
+        )
+        secret_password = testing.Secret(
+            {"bootstrap-password": "password123"},
+            id="secret:abc",
+        )
+        token_secret = testing.Secret(
+            {"token": "mock-token-123"},
+            id="secret:outpost",
+            owner="app",
+            label=f"authentik-ldap-outpost-token-{DEPLOYMENT_IDENTITY}",
+        )
+
+        ldap_relation = testing.Relation(
+            endpoint="ldap",
+            interface="ldap",
+            remote_app_name="nextcloud",
+        )
+
+        traefik_route_relation = testing.Relation(
+            endpoint="traefik-route",
+            interface="traefik_route",
+            remote_app_name="traefik",
+            remote_app_data={
+                "external_host": "external.address.dns",
+                "scheme": "https",
+            },
+        )
+
+        peer_relation = testing.PeerRelation(
+            endpoint="authentik-ldap-peers",
+            interface="authentik_ldap_peers",
+            local_app_data={
+                "outpost_token_secret_id": "secret:outpost",
+                f"client_{ldap_relation.id}": json.dumps({
+                    "user_id": "42",
+                    "username": "ldap-client-relation-1",
+                }),
+            },
+        )
+
+        state_in = create_state(
+            can_connect=True,
+            relations=[server_info_relation, ldap_relation, peer_relation, traefik_route_relation],
+            secrets=[secret_token, secret_password, token_secret],
+            config={"expose_ldap_ingress": True},
+        )
+
+        state_out = context.run(context.on.relation_changed(traefik_route_relation), state_in)
+
+        consumer_rel = state_out.get_relation(ldap_relation.id)
+        urls = json.loads(consumer_rel.local_app_data.get("urls", "[]"))
+        assert urls == ["ldap://external.address.dns:389"]
+        # LDAPS is unaffected by the cleartext switch.
+        ldaps_urls = json.loads(consumer_rel.local_app_data.get("ldaps_urls", "[]"))
+        assert ldaps_urls == ["ldaps://external.address.dns:636"]
+
+    def test_ingress_domain_is_used_as_the_advertised_ldaps_host(
+        self,
+        context: testing.Context,
+        server_info_relation: testing.Relation,
+    ) -> None:
+        """The advertised LDAPS host must be the name Traefik matches SNI on.
+
+        With ingress_domain set, the LDAPS router rule becomes
+        HostSNI(`<ingress_domain>`). Advertising Traefik's own external_host
+        would make clients present an SNI that cannot match, and Traefik would
+        drop the connection.
+        """
+        secret_token = testing.Secret({"api-token": "token123"}, id="secret:xyz")
+        secret_password = testing.Secret({"bootstrap-password": "password123"}, id="secret:abc")
+        token_secret = testing.Secret(
+            {"token": "mock-token-123"},
+            id="secret:outpost",
+            owner="app",
+            label=f"authentik-ldap-outpost-token-{DEPLOYMENT_IDENTITY}",
+        )
+
+        ldap_relation = testing.Relation(
+            endpoint="ldap",
+            interface="ldap",
+            remote_app_name="nextcloud",
+        )
+
+        traefik_route_relation = testing.Relation(
+            endpoint="traefik-route",
+            interface="traefik_route",
+            remote_app_name="traefik",
+            remote_app_data={
+                "external_host": "external.address.dns",
+                "scheme": "https",
+            },
+        )
+
+        peer_relation = testing.PeerRelation(
+            endpoint="authentik-ldap-peers",
+            interface="authentik_ldap_peers",
+            local_app_data={
+                "outpost_token_secret_id": "secret:outpost",
+                f"client_{ldap_relation.id}": json.dumps({
+                    "user_id": "42",
+                    "username": "ldap-client-relation-1",
+                }),
+            },
+        )
+
+        state_in = create_state(
+            can_connect=True,
+            relations=[server_info_relation, ldap_relation, peer_relation, traefik_route_relation],
+            secrets=[secret_token, secret_password, token_secret],
+            config={"ingress_domain": "outpost.example.com"},
+        )
+
+        state_out = context.run(context.on.relation_changed(traefik_route_relation), state_in)
+
+        consumer_rel = state_out.get_relation(ldap_relation.id)
+        ldaps_urls = json.loads(consumer_rel.local_app_data.get("ldaps_urls", "[]"))
+        assert ldaps_urls == ["ldaps://outpost.example.com:636"]
 
     def test_expose_ldap_ingress_config_change_submits_route(
         self,

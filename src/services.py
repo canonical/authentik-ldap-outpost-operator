@@ -12,7 +12,6 @@ from ops.pebble import Layer, LayerDict
 from constants import (
     COMMAND,
     LDAP_PORT,
-    LDAPS_PORT,
     PEBBLE_READY_CHECK_NAME,
     SERVICE_NAME,
     WORKLOAD_CONTAINER,
@@ -97,7 +96,6 @@ class WorkloadService:
         """Open workload ports."""
         try:
             self._unit.open_port(protocol="tcp", port=LDAP_PORT)
-            self._unit.open_port(protocol="tcp", port=LDAPS_PORT)
         except Exception as e:
             logger.error("Failed to open ports: %s", e)
 

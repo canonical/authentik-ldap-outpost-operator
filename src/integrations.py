@@ -24,9 +24,9 @@ from ops.charm import CharmBase
 from constants import (
     AUTHENTIK_INSECURE,
     EXTERNAL_LDAP_PORT,
+    EXTERNAL_LDAPS_PORT,
     LDAP_PORT,
     LDAP_RELATION,
-    LDAPS_PORT,
     SERVER_INFO_RELATION,
     TRAEFIK_ROUTE_RELATION,
 )
@@ -105,31 +105,39 @@ class LdapProviderIntegration:
     def update_relation_data(
         self,
         relation_id: int,
-        unit_address: str,
+        cluster_address: str,
         base_dn: str,
         bind_dn: str,
         password: str,
         ldaps_enabled: bool = False,
         external_host: Optional[str] = None,
+        expose_ldap_ingress: bool = False,
+        ingress_domain: Optional[str] = None,
     ) -> None:
         """Update specific LDAP relation data for a consumer.
 
         Args:
             relation_id: The ID of the relation to update.
-            unit_address: The unit's network address.
+            cluster_address: The in-cluster address of the application.
             base_dn: The Base DN of the directory.
             bind_dn: The Bind DN for the service account.
             password: The password for the service account.
-            ldaps_enabled: Whether secure LDAPS is enabled.
+            ldaps_enabled: Whether Traefik terminates LDAPS for this outpost.
             external_host: Optional external host from Traefik.
+            expose_ldap_ingress: Whether cleartext LDAP is published via Traefik.
+            ingress_domain: Optional SNI domain configured for the LDAPS router.
         """
+        if expose_ldap_ingress and external_host:
+            urls = [f"ldap://{external_host}:{EXTERNAL_LDAP_PORT}"]
+        else:
+            urls = [f"ldap://{cluster_address}:{LDAP_PORT}"]
+
+        ldaps_host = ingress_domain or external_host
         ldaps_urls = (
-            [f"ldaps://{external_host}:{LDAPS_PORT}"]
-            if ldaps_enabled and external_host
-            else [f"ldaps://{unit_address}:{LDAPS_PORT}"]
+            [f"ldaps://{ldaps_host}:{EXTERNAL_LDAPS_PORT}"] if ldaps_enabled and ldaps_host else []
         )
         data = LdapProviderData(
-            urls=[f"ldap://{unit_address}:{LDAP_PORT}"],
+            urls=urls,
             ldaps_urls=ldaps_urls,
             base_dn=base_dn,
             starttls=False,
@@ -213,7 +221,7 @@ class TraefikRouteIntegration:
         static_config = {
             "entryPoints": {
                 "ldaps": {
-                    "address": f":{LDAPS_PORT}",
+                    "address": f":{EXTERNAL_LDAPS_PORT}",
                     "proxyProtocol": {"insecure": True},
                 }
             }

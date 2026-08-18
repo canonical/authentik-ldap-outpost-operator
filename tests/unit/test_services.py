@@ -7,7 +7,7 @@ from unittest.mock import MagicMock, create_autospec
 
 import ops
 
-from constants import LDAP_PORT, LDAPS_PORT, SERVICE_NAME
+from constants import EXTERNAL_LDAPS_PORT, LDAP_PORT, METRICS_PORT, SERVICE_NAME
 from services import PebbleService, WorkloadService
 
 
@@ -70,8 +70,13 @@ class TestPebbleService:
 class TestWorkloadService:
     """Tests for WorkloadService."""
 
-    def test_open_port_opens_ldap_and_ldaps(self) -> None:
-        """Test that WorkloadService opens both LDAP and LDAPS ports on the Juju unit."""
+    def test_open_port_opens_only_cleartext_ldap(self) -> None:
+        """Only the container's real listener is opened; LDAPS lives on Traefik.
+
+        The outpost never serves LDAPS itself: Traefik terminates TLS on
+        EXTERNAL_LDAPS_PORT and forwards cleartext to LDAP_PORT. Opening 636 on
+        the unit would publish a port with nothing behind it.
+        """
         mock_unit = create_autospec(ops.Unit)
         mock_container = MagicMock()
         mock_unit.get_container.return_value = mock_container
@@ -79,8 +84,10 @@ class TestWorkloadService:
         service = WorkloadService(mock_unit)
         service.open_port()
 
-        mock_unit.open_port.assert_any_call(protocol="tcp", port=LDAP_PORT)
-        mock_unit.open_port.assert_any_call(protocol="tcp", port=LDAPS_PORT)
+        mock_unit.open_port.assert_called_once_with(protocol="tcp", port=LDAP_PORT)
+        opened_ports = {call.kwargs["port"] for call in mock_unit.open_port.call_args_list}
+        assert EXTERNAL_LDAPS_PORT not in opened_ports
+        assert METRICS_PORT not in opened_ports
 
     def test_is_running_true_when_service_up_and_check_up(self) -> None:
         """Test is_running returns True when the Pebble service is active and ready check is passing."""
