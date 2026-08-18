@@ -60,7 +60,26 @@ The `pg-database` relation SHALL be removed.
 - **THEN** the peer relation `authentik-ldap-peers` is established automatically by Juju
 
 ### Requirement: Constants file is complete
-`src/constants.py` SHALL define `WORKLOAD_CONTAINER = "authentik-ldap"`, `LDAP_PORT = 3389`, `LDAPS_PORT = 6636`, all relation name constants used in `charm.py` and `integrations.py`, `BASE_DN`, `BIND_DN`, and `AUTHENTIK_INSECURE`.
+`src/constants.py` SHALL define `WORKLOAD_CONTAINER = "authentik-ldap"`, the port
+constants below, all relation name constants used in `charm.py` and
+`integrations.py`, `BASE_DN`, `BIND_DN`, and `AUTHENTIK_INSECURE`.
+
+Port constants SHALL distinguish container listeners from ingress entrypoints,
+because the two are not the same and conflating them has produced dead ports and
+unreachable relation data:
+
+- `LDAP_PORT = 3389` — cleartext LDAP served by the outpost process inside the
+  container. This is the only listener the container starts, and it is Traefik's
+  backend target.
+- `EXTERNAL_LDAP_PORT = 389` — Traefik's cleartext entrypoint, published only
+  when `expose_ldap_ingress` is enabled.
+- `EXTERNAL_LDAPS_PORT = 636` — Traefik's LDAPS entrypoint, where Traefik
+  terminates TLS and forwards cleartext to `LDAP_PORT`.
+- `METRICS_PORT = 9300` — Prometheus registry, scraped pod-to-pod.
+
+Upstream authentik would serve LDAPS on 6636, but the charm never provisions the
+outpost with a certificate, so no LDAPS listener is ever started inside the
+container and no constant describes one.
 
 #### Scenario: No undefined constant references
 - **WHEN** `src/charm.py` and `src/integrations.py` import from `constants`

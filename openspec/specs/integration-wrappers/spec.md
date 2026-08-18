@@ -28,12 +28,39 @@ This specification defines the standalone integration wrappers found in `src/int
 - **WHEN** the underlying requirer is ready
 - **THEN** `ServerInfoIntegration.is_ready` returns `True`
 
-### Requirement: `LdapProviderIntegration.update_relation_data()` sets relation databag
-`LdapProviderIntegration` SHALL wrap `LdapProvider` from `charms.glauth_k8s.v0.ldap`. Its `update_relation_data(relation_id: int, unit_address: str, base_dn: str, bind_dn: str, password: str)` method SHALL call `LdapProvider.update_relations_app_data()` with a `LdapProviderData` containing `urls`, `ldaps_urls`, `base_dn`, `bind_dn`, `bind_password`, `starttls=False`, and `auth_method="simple"` for the specified relation ID.
+### Requirement: `LdapProviderIntegration.update_relation_data()` advertises only reachable endpoints
+`LdapProviderIntegration` SHALL wrap `LdapProvider` from
+`charms.glauth_k8s.v0.ldap`. Its
+`update_relation_data(relation_id, cluster_address, base_dn, bind_dn, password, ldaps_enabled=False, external_host=None, expose_ldap_ingress=False, ingress_domain=None)`
+method SHALL call `LdapProvider.update_relations_app_data()` with an
+`LdapProviderData` containing `urls`, `ldaps_urls`, `base_dn`, `bind_dn`,
+`bind_password`, `starttls=False`, and `auth_method="simple"` for the specified
+relation ID. Callers SHALL pass arguments by keyword.
+
+Endpoint construction SHALL advertise only endpoints that are actually
+reachable:
+
+- `urls` SHALL be `[ldap://<external_host>:<EXTERNAL_LDAP_PORT>]` when
+  `expose_ldap_ingress` is enabled and an `external_host` is known, and SHALL
+  otherwise be `[ldap://<cluster_address>:<LDAP_PORT>]`. `cluster_address` SHALL
+  be the application's Kubernetes Service DNS name, never Traefik's host,
+  because Traefik does not expose `LDAP_PORT`.
+- `ldaps_urls` SHALL be `[ldaps://<host>:<EXTERNAL_LDAPS_PORT>]` when
+  `ldaps_enabled` and a host is known, and SHALL otherwise be an empty list. The
+  host SHALL be `ingress_domain` when set, falling back to `external_host`,
+  because the LDAPS router matches `HostSNI` on that name.
 
 #### Scenario: Provider data written to relation
-- **WHEN** `update_relation_data(11, "10.0.0.1", "dc=ldap", "cn=sa", "secret")` is called and a `ldap` relation exists
-- **THEN** `LdapProvider.update_relations_app_data()` is called with correct URL and credential values for relation ID 11
+- **WHEN** `update_relation_data()` is called with
+  `cluster_address="authentik-ldap-outpost.my-model.svc.cluster.local"`, a
+  `ldap` relation exists, and `expose_ldap_ingress` is disabled
+- **THEN** `LdapProvider.update_relations_app_data()` is called for that relation
+  ID with `urls` set to the in-cluster cleartext endpoint
+
+#### Scenario: No LDAPS endpoint is advertised without Traefik
+- **WHEN** `ldaps_enabled` is `False`
+- **THEN** `ldaps_urls` is an empty list, because no certificate is ever
+  provisioned to the container and there is no LDAPS listener to point at
 
 ### Requirement: `IngressIntegration` exposes ingress requirer events
 `IngressIntegration` SHALL wrap two `IngressPerUnitRequirer` instances (one for `ingress`, one for `ldaps-ingress`). It SHALL expose `ldap_requirer` and `ldaps_requirer` properties so `charm.py` can observe their `on.ready` events directly.

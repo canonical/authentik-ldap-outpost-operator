@@ -33,13 +33,18 @@ This specification defines the unit tests written for underlying workload servic
 - **WHEN** `PebbleService.plan()` is called and the container mock reports the service as active
 - **THEN** `container.replan()` is called
 
-### Requirement: TestWorkloadService — open_port opens LDAP and LDAPS
-`test_services.py` SHALL contain a class `TestWorkloadService`. It MUST include a test `test_open_port_opens_ldap_and_ldaps` asserting that `WorkloadService.open_port()` calls the underlying unit `open_port` API (or equivalent) for both `LDAP_PORT` (3389) and `LDAPS_PORT` (6636).
+### Requirement: TestWorkloadService — open_port opens only cleartext LDAP
+`test_services.py` SHALL contain a class `TestWorkloadService`. It MUST include a
+test `test_open_port_opens_only_cleartext_ldap` asserting that
+`WorkloadService.open_port()` calls the underlying unit `open_port` API exactly
+once, for `LDAP_PORT` (3389), and that neither `EXTERNAL_LDAPS_PORT` (636) nor
+`METRICS_PORT` (9300) is opened.
 
-#### Scenario: open_port opens both LDAP and LDAPS ports
+#### Scenario: open_port opens the container's only listener
 - **WHEN** `WorkloadService.open_port()` is called
 - **THEN** port `3389` (LDAP_PORT) is opened
-- **THEN** port `6636` (LDAPS_PORT) is opened
+- **THEN** no other port is opened, because the container serves no LDAPS
+  listener and the metrics port must not reach the Kubernetes Service
 
 ### Requirement: TestWorkloadService — is_running true when service up and check up
 `TestWorkloadService` MUST include a test `test_is_running_true_when_service_up_and_check_up` asserting that `WorkloadService.is_running()` returns `True` when the Pebble service status is `ACTIVE` and the `PEBBLE_READY_CHECK_NAME` check is passing.
