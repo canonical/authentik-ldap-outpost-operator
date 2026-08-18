@@ -755,10 +755,13 @@ class AuthentikLdapCharm(ops.CharmBase):
         return bool(self._get_outpost_token())
 
     @property
-    def _ldap_host(self) -> str:
-        """The hostname/IP address for LDAP and LDAPS clients to connect to."""
-        if self.traefik_route.ldaps_enabled and self.traefik_route.external_host:
-            return self.traefik_route.external_host
+    def _cluster_address(self) -> str:
+        """The in-cluster address of the application's Kubernetes Service.
+
+        Cleartext LDAP is always reachable here. External reachability is a
+        separate matter decided by Traefik, so this deliberately never returns
+        the Traefik host.
+        """
         return f"{self.app.name}.{self.model.name}.svc.cluster.local"
 
     def _update_ldap_relation(self, relation: ops.Relation, address: str) -> bool:
@@ -799,16 +802,18 @@ class AuthentikLdapCharm(ops.CharmBase):
         bind_dn = f"cn={username},ou=users,{base_dn}"
 
         ldaps_enabled = self.traefik_route.ldaps_enabled
-        external_host = self.traefik_route.external_host if ldaps_enabled else None
+        external_host = self.traefik_route.external_host if self.traefik_route.is_ready() else None
 
         self.ldap_provider.update_relation_data(
             relation_id=relation_id,
-            unit_address=address,
+            cluster_address=address,
             base_dn=base_dn,
             bind_dn=bind_dn,
             password=password,
             ldaps_enabled=ldaps_enabled,
             external_host=external_host,
+            expose_ldap_ingress=self._config.expose_ldap_ingress,
+            ingress_domain=self._config.ingress_domain or None,
         )
         return True
 
@@ -836,7 +841,7 @@ class AuthentikLdapCharm(ops.CharmBase):
 
         success = True
         for relation in relations:
-            success &= self._update_ldap_relation(relation, self._ldap_host)
+            success &= self._update_ldap_relation(relation, self._cluster_address)
 
         return success
 

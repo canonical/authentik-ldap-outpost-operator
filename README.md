@@ -77,11 +77,11 @@ Deploy a complete, integrated Authentik identity stack along with an LDAP client
 ```bash
 # Deploy PostgreSQL database and Authentik Core services
 juju deploy postgresql-k8s --channel 14/stable
-juju deploy authentik-server --channel edge
-juju deploy authentik-worker --channel edge
+juju deploy authentik-server --channel latest/stable
+juju deploy authentik-worker --channel latest/stable
 
 # Deploy the LDAP Outpost
-juju deploy authentik-ldap-outpost --channel edge
+juju deploy authentik-ldap-outpost --channel latest/stable
 
 # Relate Core services
 juju relate authentik-server postgresql-k8s

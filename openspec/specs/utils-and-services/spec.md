@@ -33,13 +33,16 @@ All other helpers from the old `utils.py` (`condition_factory`, `database_integr
 - `__init__(self, unit: Unit)` — stores `unit` and `container = unit.get_container(WORKLOAD_CONTAINER)`
 - `version: str` property — runs `/ldap version` via pebble exec; returns empty string on error
 - `set_version(self) -> None` — calls `self._unit.set_workload_version(self.version)` with error handling
-- `open_port(self) -> None` — `self._unit.open_port(protocol="tcp", port=LDAP_PORT)` and `port=LDAPS_PORT`
+- `open_port(self) -> None` — `self._unit.open_port(protocol="tcp", port=LDAP_PORT)` only
 - `is_running(self) -> bool` — checks service is running AND `PEBBLE_READY_CHECK_NAME` check is UP
 - `is_failing(self) -> bool` — checks service is running AND `PEBBLE_READY_CHECK_NAME` check is DOWN
 
-#### Scenario: open_port opens both LDAP ports
+#### Scenario: open_port opens only the container's cleartext LDAP port
 - **WHEN** `open_port()` is called
-- **THEN** TCP port 3389 and 6636 are opened on the unit
+- **THEN** TCP port 3389 is opened on the unit
+- **AND** no other port is opened: 636 is a Traefik entrypoint with no listener
+  behind it in the container, and 9300 must stay off the Kubernetes Service
+  because the metrics endpoint is unauthenticated
 
 #### Scenario: is_running returns False when check is DOWN
 - **WHEN** the service is running but the health check is DOWN
