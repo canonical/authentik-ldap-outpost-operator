@@ -1,5 +1,28 @@
 # Changelog
 
+## [1.3.0](https://github.com/canonical/authentik-ldap-outpost-operator/compare/v1.2.1...v1.3.0) (2026-08-18)
+
+
+### Features
+
+* add working COS alert rules and dashboard ([4a568d3](https://github.com/canonical/authentik-ldap-outpost-operator/commit/4a568d3c332739fc7030a2aecc29eff81bb0709f))
+* add working COS alert rules and dashboard ([#67](https://github.com/canonical/authentik-ldap-outpost-operator/issues/67)) ([90b64c8](https://github.com/canonical/authentik-ldap-outpost-operator/commit/90b64c8add6245c1ecc815b4069f1ee59b2f6e52))
+
+
+### Bug Fixes
+
+* cache LDAP role membership to cut redundant Authentik API calls ([ce98438](https://github.com/canonical/authentik-ldap-outpost-operator/commit/ce984382289d10ebe10c337637f4e88283695e67))
+* **deps:** update dependency lightkube to v1 ([a27ad3f](https://github.com/canonical/authentik-ldap-outpost-operator/commit/a27ad3fa9db7df6a04f13f6d5d8e5f3577ce4003))
+* **deps:** update dependency lightkube to v1 ([#65](https://github.com/canonical/authentik-ldap-outpost-operator/issues/65)) ([7621622](https://github.com/canonical/authentik-ldap-outpost-operator/commit/762162259d2d530f36ed0b6038fad1177bfa9916))
+* **deps:** update dependency lightkube-models to ~=1.36.3.8 ([dd30649](https://github.com/canonical/authentik-ldap-outpost-operator/commit/dd30649ead917a98208d364e3145d3ea414c7874))
+* **deps:** update dependency lightkube-models to ~=1.36.3.8 ([#58](https://github.com/canonical/authentik-ldap-outpost-operator/issues/58)) ([09be2ef](https://github.com/canonical/authentik-ldap-outpost-operator/commit/09be2ef33db714ea32bcf6edbd5210e65490f221))
+* **ldap:** advertise only reachable LDAP and LDAPS endpoints ([6e661c5](https://github.com/canonical/authentik-ldap-outpost-operator/commit/6e661c501869f476a3a3d0ab80ca964d07ae5099))
+* make LDAP bind-flow provisioning race-safe and idempotent ([97eed1e](https://github.com/canonical/authentik-ldap-outpost-operator/commit/97eed1ed29913e5973e4424fa2c04d1fecdf49a1))
+* reconcile on upgrade-charm ([f841ff7](https://github.com/canonical/authentik-ldap-outpost-operator/commit/f841ff75072fe462dd1a7e0dcce9d8efcb2af181))
+* stop verifying the outpost token secret in-hook ([b405b7a](https://github.com/canonical/authentik-ldap-outpost-operator/commit/b405b7ac0c1ca78461178731352e721a3e466fa5))
+* stop verifying the outpost token secret in-hook ([#69](https://github.com/canonical/authentik-ldap-outpost-operator/issues/69)) ([5e74b4f](https://github.com/canonical/authentik-ldap-outpost-operator/commit/5e74b4f1ace170630c3db79c58b06f25430b69fc))
+* surface Authentik API health in status and cache role membership ([#56](https://github.com/canonical/authentik-ldap-outpost-operator/issues/56)) ([f22c2bb](https://github.com/canonical/authentik-ldap-outpost-operator/commit/f22c2bbcc2a485feda0f557b26eaf58155f41d3c))
+
 ## [1.2.1](https://github.com/canonical/authentik-ldap-outpost-operator/compare/v1.2.0...v1.2.1) (2026-07-24)
 
 
