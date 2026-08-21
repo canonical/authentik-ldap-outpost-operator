@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.3.1](https://github.com/canonical/authentik-ldap-outpost-operator/compare/v1.3.0...v1.3.1) (2026-08-21)
+
+
+### Bug Fixes
+
+* **terraform:** declare a minimum Juju provider version ([#72](https://github.com/canonical/authentik-ldap-outpost-operator/issues/72)) ([c7dcbe3](https://github.com/canonical/authentik-ldap-outpost-operator/commit/c7dcbe37218434b2181aa00ccd3d1253fb46efac))
+* **terraform:** declare a minimum Juju provider version, not a pessimistic one ([510a01d](https://github.com/canonical/authentik-ldap-outpost-operator/commit/510a01dc6939accbb5562844750e8b286052a130))
+
 ## [1.3.0](https://github.com/canonical/authentik-ldap-outpost-operator/compare/v1.2.1...v1.3.0) (2026-08-18)
 
 
