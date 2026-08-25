@@ -8,6 +8,7 @@ summary: Operator for Authentik LDAP Outpost
 description: |
     Operator for Authentik LDAP Outpost
 links:
+  documentation: https://canonical-identity.readthedocs-hosted.com/authentik/reference/charms/authentik-ldap-outpost/
   source: https://github.com/canonical/authentik-ldap-outpost-operator
   issues: https://github.com/canonical/authentik-ldap-outpost-operator/issues
 

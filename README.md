@@ -18,11 +18,11 @@ By combining the simplicity of Juju model-driven architecture with Authentik's e
 
 This operator incorporates advanced directory management practices that significantly enhance security and efficiency:
 
-### 1. Dynamic, Relation-Driven Service Accounts
+### 1. Dynamic, Relation-Driven Bind Accounts
 Rather than sharing a single global administrator credential across all client applications (which represents a critical security risk), this charm implements isolated credentials:
-* **Zero Credential Sharing**: On a `relation-joined` event with a consuming client (such as Nextcloud or GitLab), the charm leader dynamically calls the Authentik REST API to provision a unique, isolated Service Account user with a strong, randomly generated password. The bind username folds in the requirer-requested `user` for traceability while staying globally unique via the deployment identity and relation id (`ldap-client-<user>-<deployment-identity>-<relation-id>`); consumers authenticate with the returned `bind_dn`.
+* **Zero Credential Sharing**: On a `relation-joined` event with a consuming client (such as Nextcloud or GitLab), the charm leader dynamically calls the Authentik REST API to provision a unique, isolated bind account user with a strong, randomly generated password. The bind username folds in the requirer-requested `user` for traceability while staying globally unique via the deployment identity and relation id (`ldap-client-<user>-<deployment-identity>-<relation-id>`); consumers authenticate with the returned `bind_dn`.
 * **Requested user/group**: The `ldap` interface lets a requirer request a bind `user` and `group`. The outpost reflects `user` in the bind username (above) and, for `group`, adds the bind user to an **existing** Authentik group of that name (adopt-only — groups are never auto-created). Full-directory search is granted through a provider-scoped RBAC role, not group membership. Note that Authentik always serves binds under `ou=users,<base_dn>`, so the requested `group` is not used as the bind DN's organizational unit.
-* **Access Revocation**: When the relation is severed (`relation-broken`), the corresponding Service Account user is automatically deleted from the Authentik database, preventing credential rot and keeping the directory clean.
+* **Access Revocation**: When the relation is severed (`relation-broken`), the corresponding user account is automatically deleted from the Authentik database, preventing credential rot and keeping the directory clean.
 * **Resource Efficiency**: Only **one** Kubernetes pod for the Outpost is spawned in the Juju model, serving all integrated downstream LDAP clients concurrently via their respective secure accounts.
 
 ### 2. Automated Non-Interactive Bind Flow Resolution
@@ -30,7 +30,16 @@ Standard LDAP bind operations are non-interactive. The default Authentik authent
 * To address this, the charm automatically provisions a dedicated, non-interactive **LDAP Bind Flow** (`default-ldap-bind-flow`) containing only the `identification`, `password`, and `login` stages.
 * The charm automatically configures this flow as the `authentication_flow` of the LDAP Provider, allowing clients to authenticate seamlessly and securely while protecting other enterprise flows.
 
+
 ---
+
+## Documentation
+
+Comprehensive documentation for Charmed Authentik and the LDAP Outpost is available on the [Canonical Identity Documentation](https://canonical-identity.readthedocs-hosted.com/authentik/):
+- **Tutorial**: [Getting Started with Charmed Authentik](https://canonical-identity.readthedocs-hosted.com/authentik/tutorial/getting-started/)
+- **How-To Guides**: [Protect LDAP Applications with Charmed Authentik](https://canonical-identity.readthedocs-hosted.com/authentik/how-to/protect-ldap-applications/)
+- **Reference**: [Charmed Authentik LDAP Outpost Reference](https://canonical-identity.readthedocs-hosted.com/authentik/reference/charms/authentik-ldap-outpost/)
+- **Explanation**: [Charmed Authentik Security Architecture](https://canonical-identity.readthedocs-hosted.com/authentik/explanation/security/)
 
 ## Supported Relations
 
