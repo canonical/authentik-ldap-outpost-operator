@@ -30,7 +30,7 @@ This specification defines the standalone integration wrappers found in `src/int
 
 ### Requirement: `LdapProviderIntegration.update_relation_data()` advertises only reachable endpoints
 `LdapProviderIntegration` SHALL wrap `LdapProvider` from
-`charms.glauth_k8s.v0.ldap`. Its
+`charmlibs.interfaces.ldap`. Its
 `update_relation_data(relation_id, cluster_address, base_dn, bind_dn, password, ldaps_enabled=False, external_host=None, expose_ldap_ingress=False, ingress_domain=None)`
 method SHALL call `LdapProvider.update_relations_app_data()` with an
 `LdapProviderData` containing `urls`, `ldaps_urls`, `base_dn`, `bind_dn`,

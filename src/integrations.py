@@ -11,11 +11,10 @@ from typing import TYPE_CHECKING, Optional
 if TYPE_CHECKING:
     from charm import AuthentikLdapCharm
 
-
+from charmlibs.interfaces.ldap import LdapProvider, LdapProviderData
 from charms.authentik_server.v0.authentik_server_info import (
     AuthentikServerInfoRequirer,
 )
-from charms.glauth_k8s.v0.ldap import LdapProvider, LdapProviderData
 from charms.tempo_coordinator_k8s.v0.tracing import TracingEndpointRequirer
 from charms.traefik_k8s.v0.traefik_route import TraefikRouteRequirer
 from jinja2 import Template
@@ -26,7 +25,6 @@ from constants import (
     EXTERNAL_LDAP_PORT,
     EXTERNAL_LDAPS_PORT,
     LDAP_PORT,
-    LDAP_RELATION,
     SERVER_INFO_RELATION,
     TRAEFIK_ROUTE_RELATION,
 )
@@ -146,11 +144,6 @@ class LdapProviderIntegration:
             auth_method="simple",
         )
         self._provider.update_relations_app_data(data, relation_id=relation_id)
-
-        # Write ldaps_enabled=true/false directly to the app databag
-        relation = self._charm.model.get_relation(LDAP_RELATION, relation_id)
-        if relation and self._charm.unit.is_leader():
-            relation.data[self._charm.app]["ldaps_enabled"] = str(ldaps_enabled).lower()
 
 
 class TraefikRouteIntegration:
