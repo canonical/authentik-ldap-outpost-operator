@@ -1172,7 +1172,7 @@ class TestTraefikRouteRelation:
         # LDAPS is advertised via Traefik, but cleartext `urls` must keep pointing at
         # the in-cluster Service: Traefik does not expose LDAP_PORT.
         consumer_rel = state_out.get_relation(ldap_relation.id)
-        assert consumer_rel.local_app_data.get("ldaps_enabled") == "true"
+        assert "ldaps_enabled" not in consumer_rel.local_app_data
         ldaps_urls = json.loads(consumer_rel.local_app_data.get("ldaps_urls", "[]"))
         assert ldaps_urls == ["ldaps://external.address.dns:636"]
         urls = json.loads(consumer_rel.local_app_data.get("urls", "[]"))
@@ -1230,7 +1230,7 @@ class TestTraefikRouteRelation:
         # Without Traefik there is no LDAPS endpoint at all, so ldaps_urls must be
         # empty rather than advertising a pod address that serves no TLS.
         consumer_rel = state_out.get_relation(ldap_relation.id)
-        assert consumer_rel.local_app_data.get("ldaps_enabled") == "false"
+        assert "ldaps_enabled" not in consumer_rel.local_app_data
         assert json.loads(consumer_rel.local_app_data.get("ldaps_urls", "[]")) == []
         urls = json.loads(consumer_rel.local_app_data.get("urls", "[]"))
         assert urls == ["ldap://authentik-ldap-outpost.ldap-model.svc.cluster.local:3389"]
