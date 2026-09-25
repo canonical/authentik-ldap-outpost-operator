@@ -14,6 +14,7 @@ from constants import (
     LDAP_PORT,
     PEBBLE_READY_CHECK_NAME,
     SERVICE_NAME,
+    START_CHANGE_KINDS,
     WORKLOAD_CONTAINER,
 )
 from env_vars import DEFAULT_CONTAINER_ENV, EnvVarConvertible, EnvVars
@@ -132,13 +133,40 @@ class WorkloadService:
             return True
 
         if not service.is_running():
-            return False
+            return self._last_start_failed()
 
         try:
             check = self._container.get_check(PEBBLE_READY_CHECK_NAME)
             return check.status == ops.pebble.CheckStatus.DOWN
         except Exception:
             return False
+
+    def _last_start_failed(self) -> bool:
+        """Check if the most recent Pebble change for the service is a failed start.
+
+        A service that cannot be executed at all (e.g. `exec format error` when the
+        image does not match the node architecture) never reaches backoff and stays
+        inactive, so the failure is only visible on the Pebble change.
+
+        Returns:
+            True if the latest change touching the service is a start that errored.
+        """
+        try:
+            changes = self._container.pebble.get_changes(
+                select=ops.pebble.ChangeState.ALL, service=SERVICE_NAME
+            )
+        except Exception:
+            return False
+
+        if not changes:
+            return False
+
+        latest = max(changes, key=lambda change: change.spawn_time)
+        if latest.kind not in START_CHANGE_KINDS or latest.status != "Error":
+            return False
+
+        logger.warning("Failed to start %s: %s", SERVICE_NAME, latest.err)
+        return True
 
 
 class PebbleService:
