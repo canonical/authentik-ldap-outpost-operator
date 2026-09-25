@@ -26,3 +26,4 @@ jobs:
       node-size: large
       pytest-model-option: '--juju-model'
       juju-model-name: 'testing'
+      multi-arch: true
