@@ -3,6 +3,7 @@
 
 """Unit tests for services helper."""
 
+from datetime import datetime, timezone
 from unittest.mock import MagicMock, create_autospec
 
 import ops
@@ -138,6 +139,60 @@ class TestWorkloadService:
 
             service = WorkloadService(mock_unit)
             assert service.is_failing() is True
+
+    @staticmethod
+    def _inactive_service_with_changes(changes: list[MagicMock]) -> WorkloadService:
+        mock_unit = create_autospec(ops.Unit)
+        mock_container = MagicMock()
+        mock_unit.get_container.return_value = mock_container
+
+        mock_service = MagicMock()
+        mock_service.current = "inactive"
+        mock_service.is_running.return_value = False
+        mock_container.get_service.return_value = mock_service
+        mock_container.pebble.get_changes.return_value = changes
+
+        return WorkloadService(mock_unit)
+
+    @staticmethod
+    def _change(kind: str, status: str, minute: int) -> MagicMock:
+        change = MagicMock()
+        change.kind = kind
+        change.status = status
+        change.spawn_time = datetime(2026, 1, 1, 0, minute, tzinfo=timezone.utc)
+        change.err = "cannot start service: fork/exec /ldap: exec format error"
+        return change
+
+    def test_is_failing_true_when_last_start_errored(self) -> None:
+        """Test is_failing returns True when the service never started, e.g. exec format error."""
+        service = self._inactive_service_with_changes([
+            self._change("replan", "Done", 0),
+            self._change("start", "Error", 1),
+        ])
+
+        assert service.is_failing() is True
+
+    def test_is_failing_false_when_later_change_succeeded(self) -> None:
+        """Test is_failing returns False when a failed start is followed by a successful change."""
+        service = self._inactive_service_with_changes([
+            self._change("start", "Error", 0),
+            self._change("stop", "Done", 1),
+        ])
+
+        assert service.is_failing() is False
+
+    def test_is_failing_false_when_inactive_without_changes(self) -> None:
+        """Test is_failing returns False when the service has not been started yet."""
+        service = self._inactive_service_with_changes([])
+
+        assert service.is_failing() is False
+
+    def test_is_failing_false_when_changes_unavailable(self) -> None:
+        """Test is_failing returns False when Pebble changes cannot be fetched."""
+        service = self._inactive_service_with_changes([])
+        service._container.pebble.get_changes.side_effect = ops.pebble.ConnectionError()
+
+        assert service.is_failing() is False
 
     def test_version_success(self) -> None:
         """Test that version returns the stripped and parsed version string."""

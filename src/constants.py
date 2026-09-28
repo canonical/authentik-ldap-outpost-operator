@@ -32,6 +32,8 @@ METRICS_ENDPOINT_RELATION = "metrics-endpoint"
 GRAFANA_DASHBOARD_RELATION = "grafana-dashboard"
 TRACING_RELATION = "tracing"
 PEBBLE_READY_CHECK_NAME = "ready"
+# Pebble change kinds that (re)start services
+START_CHANGE_KINDS = frozenset({"start", "restart", "replan", "autostart"})
 
 BASE_DN = "DC=ldap,DC=goauthentik,DC=io"
 BIND_DN = "cn=akadmin,ou=users,DC=ldap,DC=goauthentik,DC=io"
