@@ -1,5 +1,15 @@
 # Changelog
 
+## [1.3.3](https://github.com/canonical/authentik-ldap-outpost-operator/compare/v1.3.2...v1.3.3) (2026-10-23)
+
+
+### Bug Fixes
+
+* **deps:** update dependency cosl to ~=1.11.3 ([d55c14f](https://github.com/canonical/authentik-ldap-outpost-operator/commit/d55c14f6033c854ac0002d043e225ca61eb6fee1))
+* **deps:** update dependency cosl to ~=1.11.3 ([#93](https://github.com/canonical/authentik-ldap-outpost-operator/issues/93)) ([848893b](https://github.com/canonical/authentik-ldap-outpost-operator/commit/848893bfb913636a1aadcedacf75c7f4c2c4384d))
+* **deps:** update dependency pydantic to ~=2.14.1 ([22ebbdc](https://github.com/canonical/authentik-ldap-outpost-operator/commit/22ebbdc1717b2a75d86bf85cbad83a04a1f875b0))
+* **deps:** update dependency pydantic to ~=2.14.1 ([#97](https://github.com/canonical/authentik-ldap-outpost-operator/issues/97)) ([01d375e](https://github.com/canonical/authentik-ldap-outpost-operator/commit/01d375ea4994fbbd8eaf4a270b34b1b040316f5a))
+
 ## [1.3.2](https://github.com/canonical/authentik-ldap-outpost-operator/compare/v1.3.1...v1.3.2) (2026-09-28)
 
 
