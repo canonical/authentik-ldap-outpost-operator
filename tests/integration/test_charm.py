@@ -56,6 +56,7 @@ def test_build_and_deploy(juju: jubilant.Juju, charm: Path) -> None:
         DB_APP,
         channel=DB_CHANNEL,
         trust=True,
+        force=True,
     )
 
     juju.deploy(
